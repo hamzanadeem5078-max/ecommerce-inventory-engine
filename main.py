@@ -1,15 +1,16 @@
-from fastapi import FastAPI 
+from fastapi import FastAPI
 from pydantic import BaseModel
 
-
-app = FastAPI() # making the department + door
-
-@app.get("/") # front desk of the hotel lobby where rec is
-async def root(): # welcome inside function
-    return {"message": "Welcome to the Flash Sale Engine!"}
-    
+app = FastAPI()
 
 class Product(BaseModel):
     name: str
     price: float
-    
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Flash Sale Engine!"}
+
+@app.post("/product")
+async def set_product(payload: Product):
+    return payload
