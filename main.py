@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from config import settings
 
 app = FastAPI()
 
@@ -14,3 +15,5 @@ async def root():
 @app.post("/product")
 async def set_product(payload: Product):
     return payload
+
+
