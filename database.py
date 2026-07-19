@@ -10,7 +10,6 @@ engine = create_engine(DATABASE_URL)
 #so this line basically installs the 5 different coloured holes in our tv
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-# where we actually install our wire + configuration into our console hdmi cabel the bind keyword is like plugging it in the holes of the tv
-
+# Pointing our remote control at our Smart Switch so it knows which wire to send user commands down later when a button like "Add Product" or "Buy Now" is pressed.
 Base = declarative_base()
 #so base is what gives our table its proper form no matter what table it is so postgres can read and act on it

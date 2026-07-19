@@ -2,7 +2,7 @@ from database import Base
 from sqlalchemy import Column, Integer, String, Boolean, Float
 
 class Product(Base):
-    __tablename__ = "products"
+    __tablename__ = "products" #__tablename__ a keyword not a variable
     id = Column(Integer, primary_key=True, nullable=False)
     name = Column(String,primary_key=False,nullable=False)
     description = Column(String,primary_key=False,nullable=True)
