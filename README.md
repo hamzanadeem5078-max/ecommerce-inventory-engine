@@ -55,10 +55,9 @@ During this build, I made five critical assumptions that completely broke the en
 
 Right now, PostgreSQL has no idea that our `Product` table blueprint from Day 9 even exists. It's a drawing sitting on a desk. Today, we wired our central application hub (`main.py`) directly to the raw database engine at startup to bridge this gap. 
 
-#### The Playdough Shapemaker & The Construction Crew
-Think of our SQLAlchemy declarative `Base` as a **custom playdough shapemaker**. In our models layer, we used this shapemaker to design the exact contours, limits, and edges of the `Products` table. The shapemaker gave us the thumbs-up, signaling that the design was structurally sound and fit the master mold—but the actual physical building hadn't been constructed yet.
 
-Today, we marched straight into the central main office (`main.py`). We handed our blueprint and the official master mold (`Base.metadata`) directly to our heavy-machinery **construction crew (`engine`)**, issuing a strict, non-negotiable directive: 
-> *"Take this blueprint and our official stamp, inspect our live PostgreSQL site, and build any physical structure defined in this mold that does not exist yet."*
+### Day 11: Request Lifecycle Session Dependency & The Automated Hatch
+The Vault Key & The Automated Hatch
+Think of our database connection pool as a stack of specialized vault keys, and every incoming HTTP request as a customer walking up to a bank teller window. The bank cannot hand out permanent keys to every visitor without running out and leaving the locks vulnerable, nor can it rely on manual tracking that constantly risks leaving vault doors wide open.
 
-By invoking `Base.metadata.create_all(bind=engine)`, our construction crew fires up the machinery on server ignition. They audit Postgres, realize the `products` table is missing, and execute the structural DDL to pour the concrete. We also isolated our validation layer by explicitly renaming our Pydantic payload to `ProductSchema`, ensuring our data-entry filters never clash with our database structural models.
+To solve this, we built an automated hatch mechanism (get_db) that acts as a secure intermediary. When a request's turn arrives, the hatch slides out a single, fresh, isolated session key for the duration of that specific transaction. The application uses it inside a protected window to handle its business, and the absolute moment the interaction ends—whether it succeeds or crashes halfway through—a mechanical trapdoor (finally) instantly grabs the connection back and drops it safely into the return bin (db.close()).
