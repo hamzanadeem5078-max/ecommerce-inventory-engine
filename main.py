@@ -2,10 +2,11 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from config import settings
 from database import engine, Base
-from models import Product # 1. This imports the database blueprint
+import models # 1. This imports the database blueprint
 from database import get_db
 from fastapi import Depends
 from sqlalchemy.orm import Session
+
 
 
 
@@ -23,7 +24,13 @@ async def root():
 # 3. Updated the payload type to match the new schema name
 @app.post("/product")
 async def set_product(payload: ProductSchema, db = Depends(get_db)):
-    return payload
+    new_product = models.Product(**payload.model_dump()) # making sure in correct table format and then converting payload object to correct ditionary format
+    db.add(new_product) # row placed in temporary memory
+    db.commit() # permenantly saves row in db table
+    db.refresh(new_product)  # a unique number stampped on new product addition 
+    return new_product # showing new product addition row to the client
+
+
 
 # 4. Fires the machinery to look at 'Product' and build it in Postgres
 Base.metadata.create_all(bind=engine)
