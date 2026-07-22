@@ -75,3 +75,17 @@ The Temporary Holding Zone (db.add()): Once the SQLAlchemy model instance is cre
 The Permanent Seal (db.commit()): Running db.commit() is the official stamp of approval. It permanently writes the row into our PostgreSQL database table, locking the transaction into history.
 
 The Final Identity Stamp (db.refresh()): Finally, db.refresh(new_product) updates our Python instance with the database's freshly generated auto-incrementing ID and default fields, ensuring we hand back a fully synced object to the client.
+
+
+## Day 13: Building the Product Retrieval GET Route (The Filing Room & Clerk Workflow)
+Today, we built our very first HTTP GET route at /products to pull every single item stored in our inventory database. To truly understand how FastAPI, SQLAlchemy, and PostgreSQL hand off data under the hood, I broke it down using a real-world physical analogy: The Filing Room and the Counter Clerk.
+
+The Client Request (The Customer at the Counter): A client sends an HTTP GET request, walking up to the service counter and handing the clerk a slip saying: "Give me all the records in the products file."
+
+Step 1: Opening the Session (The Clerk Opens the Room): Before any work happens, our backend dependency injection opens up an isolated database session. This is like the clerk unlocking the door to the filing room and stepping inside.
+
+Step 2: Executing the Query (Pulling the Records): We run db.query(models.Product).all(). This translates to the clerk walking directly up to the products filing cabinet specifically dedicated to our inventory items, pulling the files, and reading through the contents.
+
+Step 3: Packaging the Results (Organizing the Envelope): The raw database rows are gathered, copied, and organized neatly. The clerk places them into an envelope right on her desk, ready to be serialized.
+
+Step 4: Returning the Response (Handing Over the Envelope): Finally, FastAPI converts those objects into a structured JSON response and slides the envelope back across the counter to the client.

@@ -28,7 +28,13 @@ async def set_product(payload: ProductSchema, db = Depends(get_db)):
     db.add(new_product) # row placed in temporary memory
     db.commit() # permenantly saves row in db table
     db.refresh(new_product)  # a unique number stampped on new product addition 
-    return new_product # showing new product addition row to the client
+    return new_product
+
+
+@app.get("/products")
+def get_products(db: Session = Depends(get_db)):
+    products = db.query(models.Product).all()
+    return products
 
 
 
