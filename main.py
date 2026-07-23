@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI,Depends, HTTPException
 from pydantic import BaseModel
 from config import settings
 from database import engine, Base
@@ -24,7 +24,7 @@ async def root():
 # 3. Updated the payload type to match the new schema name
 @app.post("/product")
 async def set_product(payload: ProductSchema, db = Depends(get_db)):
-    new_product = models.Product(**payload.model_dump()) # making sure in correct table format and then converting payload object to correct ditionary format
+    new_product = models.Product(**payload.model_dump()) # making sure in correct table format and then converting payload object to correct dictionary format
     db.add(new_product) # row placed in temporary memory
     db.commit() # permenantly saves row in db table
     db.refresh(new_product)  # a unique number stampped on new product addition 
@@ -35,6 +35,16 @@ async def set_product(payload: ProductSchema, db = Depends(get_db)):
 def get_products(db: Session = Depends(get_db)):
     products = db.query(models.Product).all()
     return products
+
+@app.get("/products/{product_id}")
+def get_product(product_id: int, db: Session = Depends(get_db)):
+    db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not db_product:
+        raise HTTPException(status_code=404, detail=f"Product with id {product_id} not found")
+
+    return db_product
+
+
 
 
 

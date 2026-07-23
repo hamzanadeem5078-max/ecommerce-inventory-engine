@@ -89,3 +89,8 @@ Step 2: Executing the Query (Pulling the Records): We run db.query(models.Produc
 Step 3: Packaging the Results (Organizing the Envelope): The raw database rows are gathered, copied, and organized neatly. The clerk places them into an envelope right on her desk, ready to be serialized.
 
 Step 4: Returning the Response (Handing Over the Envelope): Finally, FastAPI converts those objects into a structured JSON response and slides the envelope back across the counter to the client.
+
+## Day 14  Development Diary Entry
+
+* **Concept:** Fetching a Specific Product via Path Parameters (`GET /products/{id}`)
+* **The Analogy:** The database is a massive warehouse filled with thousands of metal filing cabinets. Previously, querying all products was like asking the warehouse worker to roll out an entire cabinet. Today, adding `GET /products/{id}` is like walking up to a specific locker, sliding in a key with the exact product ID number on it, and pulling out only that single file card.
