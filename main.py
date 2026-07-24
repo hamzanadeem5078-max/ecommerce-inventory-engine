@@ -44,6 +44,19 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 
     return db_product
 
+@app.put("/products/{product_id}")
+def update_product(product_id: int, payload: ProductSchema, db: Session = Depends(get_db)):
+    product_query = db.query(models.Product).filter(models.Product.id == product_id)
+    existing_product = product_query.first()
+    if not existing_product:
+      raise HTTPException(status_code=404, detail="Product not found")
+
+    existing_product.name = payload.name
+    existing_product.price = payload.price
+
+    db.commit()
+    db.refresh(existing_product)
+    return existing_product
 
 
 
