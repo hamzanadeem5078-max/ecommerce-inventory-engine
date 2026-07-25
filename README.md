@@ -94,3 +94,14 @@ Step 4: Returning the Response (Handing Over the Envelope): Finally, FastAPI con
 
 * **Concept:** Fetching a Specific Product via Path Parameters (`GET /products/{id}`)
 * **The Analogy:** The database is a massive warehouse filled with thousands of metal filing cabinets. Previously, querying all products was like asking the warehouse worker to roll out an entire cabinet. Today, adding `GET /products/{id}` is like walking up to a specific locker, sliding in a key with the exact product ID number on it, and pulling out only that single file card.
+
+
+## Day 15: Building the Product Update Pipeline (PUT /products/{product_id})
+The Mental Model (The Warehouse Supplier Slip):
+Building an update route isn't just overwriting data blindly; it's like a supplier walking up with an official update slip. You don't just toss it onto a random desk. First, you walk over to the filing cabinet and pull the exact folder using the product's ID. If the folder doesn't exist, you stop right there and hand back a 404 Not Found.
+
+Once you have the right folder, Pydantic acts as the strict intake clerk checking the slip to make sure the ink and numbers are valid. After validation, you take a pen and apply the changes directly to the card inside the folder. Finally, you lock the cabinet by executing a database commit(), permanently sealing the transaction in the daily logbook so everyone in the warehouse sees the updated reality.
+
+### Day 16: Product Deletion Route
+- **Mental Model:** Walking over to the physical filing cabinet drawer, checking if the target product folder actually exists before trying to rip it out, and raising an immediate flag if it's missing. If it's there, we shred the record right out of the PostgreSQL database and commit the change.
+- **Code Implemented:** Added the `DELETE /products/{product_id}` endpoint using FastAPI path parameters and SQLAlchemy session management (`db.get` lookup, existence validation with a 404 HTTP exception, `db.delete()`, and final `db.commit()`).

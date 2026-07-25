@@ -24,7 +24,7 @@ async def root():
 # 3. Updated the payload type to match the new schema name
 @app.post("/product")
 async def set_product(payload: ProductSchema, db = Depends(get_db)):
-    new_product = models.Product(**payload.model_dump()) # making sure in correct table format and then converting payload object to correct dictionary format
+    new_product = models.Product(**payload.model_dump()) # converting payload object to correct dictionary format
     db.add(new_product) # row placed in temporary memory
     db.commit() # permenantly saves row in db table
     db.refresh(new_product)  # a unique number stampped on new product addition 
@@ -57,6 +57,21 @@ def update_product(product_id: int, payload: ProductSchema, db: Session = Depend
     db.commit()
     db.refresh(existing_product)
     return existing_product
+
+@app.delete("/products/{product_id}")
+def delete_product(product_id: int, db: Session = Depends(get_db)):
+    product_check = db.get(models.Product, product_id)
+    
+    if not product_check:
+        raise HTTPException(status_code=404, detail="Product not found")
+        
+    db.delete(product_check)
+    db.commit()
+    
+    return {"message": "Product successfully deleted"}
+
+
+
 
 
 
