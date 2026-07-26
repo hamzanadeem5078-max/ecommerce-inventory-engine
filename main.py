@@ -6,6 +6,7 @@ import models # 1. This imports the database blueprint
 from database import get_db
 from fastapi import Depends
 from sqlalchemy.orm import Session
+from fastapi import Query
 
 
 
@@ -32,10 +33,20 @@ async def set_product(payload: ProductSchema, db = Depends(get_db)):
 
 
 @app.get("/products")
-def get_products(db: Session = Depends(get_db)):
-    products = db.query(models.Product).all()
+def get_products(
+    db: Session = Depends(get_db),
+    skip: int = Query(0, description="Number of records to skip for pagination"),
+    limit: int = Query(10, le=100, description="Max number of records to return"),
+    search: str | None = Query(None, description="Optional filter keyword"), 
+    ):
+    query = db.query(models.Product)
+    if search:
+        query = query.filter(models.Product.name.contains(search))
+    products = query.offset(skip).limit(limit).all()
     return products
 
+
+    
 @app.get("/products/{product_id}")
 def get_product(product_id: int, db: Session = Depends(get_db)):
     db_product = db.query(models.Product).filter(models.Product.id == product_id).first()

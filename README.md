@@ -105,3 +105,8 @@ Once you have the right folder, Pydantic acts as the strict intake clerk checkin
 ### Day 16: Product Deletion Route
 - **Mental Model:** Walking over to the physical filing cabinet drawer, checking if the target product folder actually exists before trying to rip it out, and raising an immediate flag if it's missing. If it's there, we shred the record right out of the PostgreSQL database and commit the change.
 - **Code Implemented:** Added the `DELETE /products/{product_id}` endpoint using FastAPI path parameters and SQLAlchemy session management (`db.get` lookup, existence validation with a 404 HTTP exception, `db.delete()`, and final `db.commit()`).
+
+
+## Day 17: The Warehouse Clerk & The Catalog Slice
+
+Trying to fetch a wholesale catalog of 10,000 items all at once is like having a delivery driver dump 10,000 binders straight onto your desk until the legs snap under the weight. Today, we built the query parameter filter and pagination logic in main.py so we don't crash the server. Now, we walk into the warehouse, hand instructions to the clerk—specifying how many pages to skip, setting a strict limit of 10 items per page so the desk stays clear, and applying an optional search filter to narrow down the exact product collection the user actually wants before a single byte leaves the floor.
