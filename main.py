@@ -7,6 +7,7 @@ from database import get_db
 from fastapi import Depends
 from sqlalchemy.orm import Session
 from fastapi import Query
+from sqlalchemy import asc, desc
 
 
 
@@ -37,12 +38,22 @@ def get_products(
     db: Session = Depends(get_db),
     skip: int = Query(0, description="Number of records to skip for pagination"),
     limit: int = Query(10, le=100, description="Max number of records to return"),
-    search: str | None = Query(None, description="Optional filter keyword"), 
-    ):
+    search: str | None = Query(None, description="Optional filter keyword"),
+    sortBy: str = Query("created_at", description="Field to sort by"),
+    order: str = Query("asc", description="Sort order: asc or desc"),
+):
     query = db.query(models.Product)
     if search:
         query = query.filter(models.Product.name.contains(search))
+
+    sort_column = getattr(models.Product, sortBy, models.Product.created_at)
+    if order == "desc":
+        query = query.order_by(desc(sort_column))
+    else:
+        query = query.order_by(asc(sort_column))
+
     products = query.offset(skip).limit(limit).all()
+
     return products
 
 

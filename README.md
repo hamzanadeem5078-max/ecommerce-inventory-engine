@@ -110,3 +110,9 @@ Once you have the right folder, Pydantic acts as the strict intake clerk checkin
 ## Day 17: The Warehouse Clerk & The Catalog Slice
 
 Trying to fetch a wholesale catalog of 10,000 items all at once is like having a delivery driver dump 10,000 binders straight onto your desk until the legs snap under the weight. Today, we built the query parameter filter and pagination logic in main.py so we don't crash the server. Now, we walk into the warehouse, hand instructions to the clerk—specifying how many pages to skip, setting a strict limit of 10 items per page so the desk stays clear, and applying an optional search filter to narrow down the exact product collection the user actually wants before a single byte leaves the floor.
+
+### Day 18: Building the Dynamic Query Sorting Mechanism
+
+* **The Problem:** Clients can't just stare at a static dump of 1,000+ product folders on a single shelf. They need the data structured exactly how they want it—whether that's sorting products from lowest to highest price or pulling the newest arrivals to the top.
+* **The Analogy:** Imagine walking into a massive warehouse with thousands of product folders lined up on a shelf. Without sorting, you're just grabbing whatever files happen to be closest to the door. Adding query parameters for sorting is like handing the warehouse clerk an extra instruction slip: *"Keep the folders grouped, but arrange this specific batch by price or creation date before handing them over."*
+* **The Implementation:** We introduced dynamic sorting parameters (`sortBy` and `order`) into our `/products` endpoint using SQLAlchemy's `getattr` to safely map request strings to database columns, paired with conditional `asc()` and `desc()` execution clauses right before hitting `.offset().limit().all()`.
