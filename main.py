@@ -8,16 +8,14 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 from fastapi import Query
 from sqlalchemy import asc, desc
+from schemas import ProductSchema, ProductUpdate
 
 
 
 
 app = FastAPI()
 
-# 2. Renamed this to ProductSchema so it doesn't overwrite our database model!
-class ProductSchema(BaseModel):
-    name: str
-    price: float
+
 
 @app.get("/")
 async def root():
@@ -91,6 +89,21 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     return {"message": "Product successfully deleted"}
+
+
+@app.patch("/products/{product_id}")
+def patch_product(product_id: int, product_update: ProductUpdate, db: Session = Depends(get_db)):
+    db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    update_data = product_update.model_dump(exclude_unset=True)
+    for key,value in update_data.items():
+        setattr(db_product, key,value)
+
+    db.commit()
+    db.refresh(db_product)
+    return db_product
 
 
 
