@@ -1,33 +1,29 @@
-from fastapi import FastAPI,Depends, HTTPException
-from pydantic import BaseModel
-from config import settings
-from database import engine, Base
-import models # 1. This imports the database blueprint
-from database import get_db
-from fastapi import Depends
-from sqlalchemy.orm import Session
-from fastapi import Query
+from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy import asc, desc
-from schemas import ProductSchema, ProductUpdate
-
-
-
+from sqlalchemy.orm import Session
+from config import settings
+from database import engine, Base, get_db
+import models
+from schemas import ProductSchema, ProductUpdate, CategoryBase, CategoryCreate, CategoryResponse
+import categories
 
 app = FastAPI()
 
+# Include the category router
+app.include_router(categories.router)
 
 
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Flash Sale Engine!"}
 
-# 3. Updated the payload type to match the new schema name
+
 @app.post("/product")
 async def set_product(payload: ProductSchema, db = Depends(get_db)):
-    new_product = models.Product(**payload.model_dump()) # converting payload object to correct dictionary format
-    db.add(new_product) # row placed in temporary memory
-    db.commit() # permenantly saves row in db table
-    db.refresh(new_product)  # a unique number stampped on new product addition 
+    new_product = models.Product(**payload.model_dump())
+    db.add(new_product)
+    db.commit()
+    db.refresh(new_product)
     return new_product
 
 
@@ -55,7 +51,6 @@ def get_products(
     return products
 
 
-    
 @app.get("/products/{product_id}")
 def get_product(product_id: int, db: Session = Depends(get_db)):
     db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
@@ -64,19 +59,22 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 
     return db_product
 
+
 @app.put("/products/{product_id}")
 def update_product(product_id: int, payload: ProductSchema, db: Session = Depends(get_db)):
     product_query = db.query(models.Product).filter(models.Product.id == product_id)
     existing_product = product_query.first()
     if not existing_product:
-      raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(status_code=404, detail="Product not found")
 
     existing_product.name = payload.name
     existing_product.price = payload.price
+    existing_product.category_id = payload.category_id
 
     db.commit()
     db.refresh(existing_product)
     return existing_product
+
 
 @app.delete("/products/{product_id}")
 def delete_product(product_id: int, db: Session = Depends(get_db)):
@@ -98,18 +96,13 @@ def patch_product(product_id: int, product_update: ProductUpdate, db: Session = 
         raise HTTPException(status_code=404, detail="Product not found")
 
     update_data = product_update.model_dump(exclude_unset=True)
-    for key,value in update_data.items():
-        setattr(db_product, key,value)
+    for key, value in update_data.items():
+        setattr(db_product, key, value)
 
     db.commit()
     db.refresh(db_product)
     return db_product
 
 
-
-
-
-
-
-# 4. Fires the machinery to look at 'Product' and build it in Postgres
+# Fires the machinery to look at models and build them in Postgres
 Base.metadata.create_all(bind=engine)
