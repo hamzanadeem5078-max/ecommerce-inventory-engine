@@ -119,4 +119,18 @@ Trying to fetch a wholesale catalog of 10,000 items all at once is like having a
 
 
 ## Day 19: Using HTTP Patch
-oday, we built the partial update engine using HTTP PATCH, moving away from the brute-force replacement model of PUT.If you use PUT, it is like walking into the warehouse archives and shredding an entire product sheet just because a single price tag changed. If you accidentally forget to copy over the description or stock count during that rewrite, the whole record becomes corrupted or invalid.PATCH solves this cleanly. It works like this: pick up a sticky note $\rightarrow$ write down the changed field value on the note $\rightarrow$ walk up to the filing cabinet drawer $\rightarrow$ find the specific item's folder $\rightarrow$ open it $\rightarrow$ apply the sticky note right over the old value.In code, model_dump(exclude_unset=True) isolates exactly what fields the client cared to touch, ignoring everything else. We pull the existing row from PostgreSQL, iterate through the delta map using setattr(), commit the transaction, and refresh. Only the changed attributes get written to disk, keeping our database state atomic and safe.
+Today, we built the partial update engine using HTTP PATCH, moving away from the brute-force replacement model of PUT.If you use PUT, it is like walking into the warehouse archives and shredding an entire product sheet just because a single price tag changed. If you accidentally forget to copy over the description or stock count during that rewrite, the whole record becomes corrupted or invalid.PATCH solves this cleanly. It works like this: pick up a sticky note $\rightarrow$ write down the changed field value on the note $\rightarrow$ walk up to the filing cabinet drawer $\rightarrow$ find the specific item's folder $\rightarrow$ open it $\rightarrow$ apply the sticky note right over the old value.In code, model_dump(exclude_unset=True) isolates exactly what fields the client cared to touch, ignoring everything else. We pull the existing row from PostgreSQL, iterate through the delta map using setattr(), commit the transaction, and refresh. Only the changed attributes get written to disk, keeping our database state atomic and safe.
+
+
+## Day 20: Implementing Category-to-Product Relationships & Modular Routing
+Mental Model: A grocery store without categories is just a giant pile of inventory on the floor where shoppers take forever to find anything. To fix this, we built aisles and shelves. A single category (aisle) can hold multiple products, but an individual product links directly back to its specific category via an aisle stamp (Foreign Key).
+
+Implementation Details:
+
+Created a dedicated categories.py router module implementing RESTful endpoints (POST /categories/ and GET /categories/) with strict uniqueness validation on category names.
+
+Updated models.py to define the Category entity with an explicit primary key and a SQLAlchemy relationship back-populating to the Product model.
+
+Altered the Product model to include a mandatory category_id Foreign Key constraint referencing categories.id, turning isolated product records into a properly structured relational schema.
+
+Integrated the new category router cleanly inside main.py using FastAPI's modular include_router pattern.
