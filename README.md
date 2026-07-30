@@ -134,3 +134,10 @@ Updated models.py to define the Category entity with an explicit primary key and
 Altered the Product model to include a mandatory category_id Foreign Key constraint referencing categories.id, turning isolated product records into a properly structured relational schema.
 
 Integrated the new category router cleanly inside main.py using FastAPI's modular include_router pattern.
+
+
+
+### Day 21: Relational Constraints, Category Filtering, and Foreign Key Joins
+**The Analogy:** Imagine a massive supermarket where every single product is placed on a specific shelf inside a designated aisle (the Category). When a customer or a stock clerk wants to find all items belonging to a particular department, they don't wander aimlessly through the entire store—they walk directly to that specific aisle and look at the shelves inside it. The foreign key acts like the permanent aisle number printed on the back of each product box, ensuring that every item is securely mapped to its correct home location and can never be misplaced.
+
+Today, we hardened the database layer by enforcing strict relational constraints between products and categories in PostgreSQL, moving away from isolated tables to a cohesive, interconnected schema. Using SQLAlchemy relationships and foreign keys, we built optimized query filters that fetch joined entities across tables instantly, avoiding N+1 performance bottlenecks and maintaining rigid data integrity at the storage level.

@@ -29,6 +29,7 @@ async def set_product(payload: ProductSchema, db = Depends(get_db)):
 
 @app.get("/products")
 def get_products(
+    category_id: int | None = None,
     db: Session = Depends(get_db),
     skip: int = Query(0, description="Number of records to skip for pagination"),
     limit: int = Query(10, le=100, description="Max number of records to return"),
@@ -37,8 +38,13 @@ def get_products(
     order: str = Query("asc", description="Sort order: asc or desc"),
 ):
     query = db.query(models.Product)
+    if category_id is not None:
+        query = query.filter(models.Product.category_id == category_id)
+        
+
     if search:
         query = query.filter(models.Product.name.contains(search))
+        
 
     sort_column = getattr(models.Product, sortBy, models.Product.created_at)
     if order == "desc":
@@ -47,6 +53,9 @@ def get_products(
         query = query.order_by(asc(sort_column))
 
     products = query.offset(skip).limit(limit).all()
+
+    
+
 
     return products
 
