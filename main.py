@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query,status
 from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session
 from config import settings
@@ -20,7 +20,15 @@ async def root():
 
 @app.post("/product")
 async def set_product(payload: ProductSchema, db = Depends(get_db)):
+    category = db.query(models.Category).filter(models.Category.id == payload.category_id).first()
+    if not category:
+            raise HTTPException(
+            status_code= status.HTTP_404_NOT_FOUND,
+            detail=f"Category with id {payload.category_id} does not exist"
+        )
     new_product = models.Product(**payload.model_dump())
+    
+    
     db.add(new_product)
     db.commit()
     db.refresh(new_product)
@@ -71,6 +79,13 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 
 @app.put("/products/{product_id}")
 def update_product(product_id: int, payload: ProductSchema, db: Session = Depends(get_db)):
+    if payload.category_id is not None:
+        category = db.query(models.Category).filter(models.Category.id == payload.category_id).first()
+        if not category:
+            raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Category with id {payload.category_id} does not exist"
+        )
     product_query = db.query(models.Product).filter(models.Product.id == product_id)
     existing_product = product_query.first()
     if not existing_product:
