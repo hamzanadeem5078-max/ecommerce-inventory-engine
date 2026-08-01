@@ -141,3 +141,11 @@ Integrated the new category router cleanly inside main.py using FastAPI's modula
 **The Analogy:** Imagine a massive supermarket where every single product is placed on a specific shelf inside a designated aisle (the Category). When a customer or a stock clerk wants to find all items belonging to a particular department, they don't wander aimlessly through the entire store—they walk directly to that specific aisle and look at the shelves inside it. The foreign key acts like the permanent aisle number printed on the back of each product box, ensuring that every item is securely mapped to its correct home location and can never be misplaced.
 
 Today, we hardened the database layer by enforcing strict relational constraints between products and categories in PostgreSQL, moving away from isolated tables to a cohesive, interconnected schema. Using SQLAlchemy relationships and foreign keys, we built optimized query filters that fetch joined entities across tables instantly, avoiding N+1 performance bottlenecks and maintaining rigid data integrity at the storage level.
+
+
+## Day 22
+Retail Warehouse Directory Verification: Before placing a new shipment of shoes or modifying an existing inventory record on a shelf, we first consult the central warehouse directory board. If a client attempts to assign a product to a non-existent shelf (category ID), we halt the process instantly and reject the payload rather than wandering around looking for a ghost shelf.
+
+## DAY 23
+The Supermarket Aisle 
+Think of fetching related category data like walking into a supermarket aisle to pick up a product off the shelf. Instead of just grabbing the item and having to wander back to the help desk later just to figure out what section or aisle you're standing in, the product shelf already has a clean sticker slapped right on it with all the aisle details, name, and info built-in. By using SQLAlchemy's joinedload, PostgreSQL hands us the product and its category info in one single efficient trip, completely avoiding missing attribute errors or extra trips back to the database.
