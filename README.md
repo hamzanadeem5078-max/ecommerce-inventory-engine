@@ -146,6 +146,5 @@ Today, we hardened the database layer by enforcing strict relational constraints
 ## Day 22
 Retail Warehouse Directory Verification: Before placing a new shipment of shoes or modifying an existing inventory record on a shelf, we first consult the central warehouse directory board. If a client attempts to assign a product to a non-existent shelf (category ID), we halt the process instantly and reject the payload rather than wandering around looking for a ghost shelf.
 
-## DAY 23
-The Supermarket Aisle 
+## DAY 23: The Supermarket Aisle 
 Think of fetching related category data like walking into a supermarket aisle to pick up a product off the shelf. Instead of just grabbing the item and having to wander back to the help desk later just to figure out what section or aisle you're standing in, the product shelf already has a clean sticker slapped right on it with all the aisle details, name, and info built-in. By using SQLAlchemy's joinedload, PostgreSQL hands us the product and its category info in one single efficient trip, completely avoiding missing attribute errors or extra trips back to the database.
