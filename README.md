@@ -148,3 +148,8 @@ Retail Warehouse Directory Verification: Before placing a new shipment of shoes 
 
 ## DAY 23: The Supermarket Aisle 
 Think of fetching related category data like walking into a supermarket aisle to pick up a product off the shelf. Instead of just grabbing the item and having to wander back to the help desk later just to figure out what section or aisle you're standing in, the product shelf already has a clean sticker slapped right on it with all the aisle details, name, and info built-in. By using SQLAlchemy's joinedload, PostgreSQL hands us the product and its category info in one single efficient trip, completely avoiding missing attribute errors or extra trips back to the database.
+
+## Day 24: Inventory Stock Validation & Low-Stock Trigger
+Imagine you're running a busy warehouse shopping counter. Before a customer locks in their order and clears the checkout desk, they don't just guess what's on the shelf—they walk over, count the remaining boxes, and check the red-line meter. If the count drops below that red line, a warning light flashes right at the attendant's desk, signaling that the item is critically low and capping any further large orders until restocked. 
+
+On Day 24, we baked this exact physical constraint directly into our Pydantic schemas using `@computed_field`. Instead of forcing downstream clients to manually calculate if inventory is running thin, our `ProductResponse` model dynamically evaluates the remaining stock against a hardcoded `low_stock_threshold` of 5. The moment inventory dips to or below that red line, `is_low_stock` flips to true, keeping our API logic actively inspecting database states before confirming availability.

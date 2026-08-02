@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 from typing import Optional
 
 
@@ -42,3 +42,13 @@ class ProductResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+    low_stock_threshold: int = (
+      5  # Default threshold for low stock warning
+  )
+
+    @computed_field
+    @property
+    def is_low_stock(self) -> bool:
+        return self.inventory <= self.low_stock_threshold
