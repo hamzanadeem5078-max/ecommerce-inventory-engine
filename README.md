@@ -157,6 +157,6 @@ On Day 24, we baked this exact physical constraint directly into our Pydantic sc
 
 ### Day 25: Testing Day & Partial Update Refinement
 
-* **The Analogy:** Testing endpoints and fixing field names is like doing a final dry run of a conveyor belt before turning the factory switch to permanent ON. By dropping in `exclude_unset=True`, we made sure our sorting machine only picks up the specific packages handed to it on the belt, rather than flattening empty boxes and accidentally wiping out data that wasn't supposed to change.
+The Analogy: Testing endpoints and fixing field names is like doing a final dry run of a conveyor belt before turning the factory switch to permanent ON. By dropping in `exclude_unset=True`, we made sure our sorting machine only picks up the specific packages handed to it on the belt, rather than flattening empty boxes and accidentally wiping out data that wasn't supposed to change.
 
 Conducted end-to-end integration testing across all core product and category routes in Postman. Refactored schema naming consistency and locked down our `PATCH` update flow using Pydantic's unset-exclusion pattern to ensure surgical, bug-free partial updates.
