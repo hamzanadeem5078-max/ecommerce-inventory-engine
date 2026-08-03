@@ -79,23 +79,42 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
     return db_product
 
 
-@app.put("/products/{product_id}", response_model=ProductResponse)
-def update_product(product_id: int, payload: ProductSchema, db: Session = Depends(get_db)):
-    if payload.category_id is not None:
-        category = db.query(models.Category).filter(models.Category.id == payload.category_id).first()
-        if not category:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Category with id {payload.category_id} does not exist"
-            )
+from typing import Optional
+from fastapi import FastAPI, Depends, HTTPException, status
+from sqlalchemy.orm import Session, joinedload
+from pydantic import BaseModel
+# (Make sure to import your models, database session, schemas, etc. as configured in your project)
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    price: Optional[float] = None
+    description: Optional[str] = None
+    inventory: Optional[int] = None
+    category_id: Optional[int] = None
+
+@app.patch("/products/{product_id}", response_model=ProductResponse)
+def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db)):
     product_query = db.query(models.Product).options(joinedload(models.Product.category)).filter(models.Product.id == product_id)
     existing_product = product_query.first()
+    
     if not existing_product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    existing_product.name = payload.name
-    existing_product.price = payload.price
-    existing_product.category_id = payload.category_id
+    # Extract only the fields that were actually passed in the Postman body
+    update_data = payload.model_dump(exclude_unset=True)
+
+    # Validate category existence only if category_id is part of the patch update
+    if "category_id" in update_data and update_data["category_id"] is not None:
+        category = db.query(models.Category).filter(models.Category.id == update_data["category_id"]).first()
+        if not category:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Category with id {update_data['category_id']} does not exist"
+            )
+
+    # Dynamically apply the updates to the existing record
+    for key, value in update_data.items():
+        setattr(existing_product, key, value)
 
     db.commit()
     db.refresh(existing_product)

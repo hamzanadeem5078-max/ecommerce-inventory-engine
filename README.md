@@ -153,3 +153,10 @@ Think of fetching related category data like walking into a supermarket aisle to
 Imagine you're running a busy warehouse shopping counter. Before a customer locks in their order and clears the checkout desk, they don't just guess what's on the shelf—they walk over, count the remaining boxes, and check the red-line meter. If the count drops below that red line, a warning light flashes right at the attendant's desk, signaling that the item is critically low and capping any further large orders until restocked. 
 
 On Day 24, we baked this exact physical constraint directly into our Pydantic schemas using `@computed_field`. Instead of forcing downstream clients to manually calculate if inventory is running thin, our `ProductResponse` model dynamically evaluates the remaining stock against a hardcoded `low_stock_threshold` of 5. The moment inventory dips to or below that red line, `is_low_stock` flips to true, keeping our API logic actively inspecting database states before confirming availability.
+
+
+### Day 25: Testing Day & Partial Update Refinement
+
+* **The Analogy:** Testing endpoints and fixing field names is like doing a final dry run of a conveyor belt before turning the factory switch to permanent ON. By dropping in `exclude_unset=True`, we made sure our sorting machine only picks up the specific packages handed to it on the belt, rather than flattening empty boxes and accidentally wiping out data that wasn't supposed to change.
+
+Conducted end-to-end integration testing across all core product and category routes in Postman. Refactored schema naming consistency and locked down our `PATCH` update flow using Pydantic's unset-exclusion pattern to ensure surgical, bug-free partial updates.

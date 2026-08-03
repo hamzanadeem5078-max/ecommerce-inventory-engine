@@ -6,13 +6,16 @@ class ProductSchema(BaseModel):
     name: str
     price: float
     category_id: int
+    description: str
+    inventory: int
 
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     price: Optional[float] = None
     description: Optional[str] = None
-    stock: Optional[int] = None
+    inventory: Optional[int] = None
+    category_id: Optional[int]
 
 
 class CategoryBase(BaseModel):
