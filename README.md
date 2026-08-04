@@ -159,4 +159,8 @@ On Day 24, we baked this exact physical constraint directly into our Pydantic sc
 
 The Analogy: Testing endpoints and fixing field names is like doing a final dry run of a conveyor belt before turning the factory switch to permanent ON. By dropping in `exclude_unset=True`, we made sure our sorting machine only picks up the specific packages handed to it on the belt, rather than flattening empty boxes and accidentally wiping out data that wasn't supposed to change.
 
-Conducted end-to-end integration testing across all core product and category routes in Postman. Refactored schema naming consistency and locked down our `PATCH` update flow using Pydantic's unset-exclusion pattern to ensure surgical, bug-free partial updates.
+
+## Product Schema & Inventory Health Logic Integration
+The Analogy: Imagine a supermarket shelf stocked with cereal boxes. Attached to the front edge of the shelf is a minimum inventory card—a red-line limit of 5 units. Every time a customer picks up a box, the store’s inventory computer automatically checks the remaining stock against that red-line limit. If the count drops below the threshold, the system instantly triggers an alert flagging that aisle for an urgent refill. Today, we baked that automatic shelf-alert trigger directly into our database models and response schemas.
+
+Technical Implementation: Updated the `Product` SQLAlchemy model with baseline inventory constraints and a `low_stock_threshold` default, then rearchitected our Pydantic response schemas to dynamically calculate and attach real-time stock health statuses on every query cycle.

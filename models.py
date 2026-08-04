@@ -19,6 +19,7 @@ class Product(Base):
     description = Column(String,primary_key=False,nullable=True)
     price = Column(Float,primary_key=False,nullable=False)
     inventory = Column(Integer,primary_key=False,server_default="0",nullable=False)
+    low_stock_threshold = Column(Integer,primary_key=False,server_default="5",default=5,nullable=False)
 
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     category = relationship("Category", back_populates="products")

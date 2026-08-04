@@ -43,8 +43,7 @@ class ProductResponse(BaseModel):
     category_id: int
     category: CategoryResponse  # Nested category response model
 
-    class Config:
-        from_attributes = True
+    
 
 
     low_stock_threshold: int = (
@@ -55,3 +54,6 @@ class ProductResponse(BaseModel):
     @property
     def is_low_stock(self) -> bool:
         return self.inventory <= self.low_stock_threshold
+
+    class Config:
+            from_attributes = True
