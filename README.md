@@ -160,7 +160,45 @@ On Day 24, we baked this exact physical constraint directly into our Pydantic sc
 The Analogy: Testing endpoints and fixing field names is like doing a final dry run of a conveyor belt before turning the factory switch to permanent ON. By dropping in `exclude_unset=True`, we made sure our sorting machine only picks up the specific packages handed to it on the belt, rather than flattening empty boxes and accidentally wiping out data that wasn't supposed to change.
 
 
-## Product Schema & Inventory Health Logic Integration
+## Day 26: Product Schema & Inventory Health Logic Integration
 The Analogy: Imagine a supermarket shelf stocked with cereal boxes. Attached to the front edge of the shelf is a minimum inventory card—a red-line limit of 5 units. Every time a customer picks up a box, the store’s inventory computer automatically checks the remaining stock against that red-line limit. If the count drops below the threshold, the system instantly triggers an alert flagging that aisle for an urgent refill. Today, we baked that automatic shelf-alert trigger directly into our database models and response schemas.
 
 Technical Implementation: Updated the `Product` SQLAlchemy model with baseline inventory constraints and a `low_stock_threshold` default, then rearchitected our Pydantic response schemas to dynamically calculate and attach real-time stock health statuses on every query cycle.
+
+
+## Development Diary: Days 26–38 Architecture Sprint
+
+## Days 26 & 29: Automated Dynamic Low-Stock Alerting & Response Logic
+The Analogy: Imagine a supermarket shelf stocked with cereal boxes. Attached to the front edge of the shelf is a minimum inventory card—a red-line threshold on your clipboard. Every time a customer buys a box, the inventory computer checks remaining stock against that red-line limit. If the count drops below the critical threshold, a low-stock tag is attached to the clipboard, flagging the aisle for an urgent refill.
+
+Technical Execution: Implemented dynamic stock health evaluation within SQLAlchemy query responses, utilizing Pydantic serialization models to attach real-time warning states without altering raw database state.
+
+## Days 27 & 31: Immutable Inventory Transaction Audit Logs & Movement Log Models
+The Analogy: Overwriting stock numbers on a dry-erase board erases history. Instead, we installed an immutable ledger vault. Every time inventory increases or decreases, a dedicated receipt slip is stamped with a precise timestamp, movement type (restock, sale, adjustment), directional quantity sign (+/-), and the employee's ID before being locked into the cabinet forever.
+
+Technical Execution: Built the InventoryTransaction SQLAlchemy model and Pydantic POST schemas, enforcing append-only audit tracking to ensure zero lost state on product movements.
+
+## Days 28, 30, 32 & 35: Historical Stock Retrieval Endpoints & Comprehensive Test Suite
+The Analogy: A manager walks up to the filing cabinet and requests the full history for Product #42. You open the drawer, pull only the "Product #42" folder, and neatly transcript the raw warehouse scratchpads onto clean, standardized company audit forms before handing them over.
+
+Technical Execution: Formulated GET /products/{id}/transactions endpoints, applying strict join filtering and Pydantic serialization. Executed multi-scenario test suites on Days 30 & 35 to verify ledger isolation and response payloads.
+
+## Days 33 & 34: Strategic Ledger Filtering, Limit & Offset Pagination
+The Analogy: Requesting a product's entire history can return 10,000 pages of ledger entries, choking the delivery truck. Instead of handing over the whole library, we hand the client a targeted index (filtering by movement type/dates) and return a specific page number containing a precise word count (limit & offset).
+
+Technical Execution: Introduced optional query parameters (transaction_type, start_date, end_date, limit, offset) mapped directly to dynamic SQLAlchemy .filter() and pagination clauses to protect memory overhead.
+
+## Day 36: Concurrency Control & Pessimistic DB Row Locking (with_for_update)
+The Analogy: 1,000 customers try to buy the last available ticket at the exact same instant. If the ticket table is wide open, multiple hands grab it simultaneously. We installed a small, single-hand slot in the ticket wall: PostgreSQL freezes the row via with_for_update(). Only one hand fits through the hole at a time to grab the ticket; all other hands wait outside until the hole clears.
+
+Technical Execution: Solved high-concurrency race conditions during flash sales by executing SELECT queries with PostgreSQL row-level locks, preventing dirty reads and phantom inventory drops.
+
+## Day 37: Atomic Flash Sale Order Checkout Endpoint & Transaction Rollback
+The Analogy: A customer places a flash sale order. The cashier locks the row, verifies stock, deducts the count, issues an order receipt, and logs the permanent movement. If the cashier drops the paper slip or runs out of ink midway, the entire checkout stops, and every action is immediately undone (rolled back) as if it never happened.
+
+Technical Execution: Constructed atomic ACID checkout pipelines inside an explicit SQLAlchemy database session, linking order creation, inventory deduction, and audit log generation inside a single unit of work with db.rollback() fallback protection.
+
+## Day 38: Order History Retrieval & Order Item Validation Route
+The Analogy: A customer returns with an Order ID. You open the order vault, check whether the receipt exists, verify the contents against the items list, and present a clean statement detailing items bought and total price paid.
+
+Technical Execution: Designed GET /orders/{order_id} with object-relational mapping to return serialized order metadata and nested order line-items cleanly.

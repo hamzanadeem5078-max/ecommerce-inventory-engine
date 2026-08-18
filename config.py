@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     database_password: str
     database_hostname: str
     database_name: str
-    class Config:
-        env_file = ".env" # has to be called env_file 
-
     
+    class Config:
+        env_file = ".env"
+
 settings = Settings()
