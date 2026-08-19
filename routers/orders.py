@@ -6,6 +6,7 @@ import schemas
 from typing import List, Optional
 from datetime import datetime
 
+
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
 
@@ -68,13 +69,49 @@ def create_order(order: schemas.OrderCreate, db: Session = Depends(get_db)):
 
 
 
-@router.get("/{order_id}", response_model=schemas.OrderResponse)
-def get_order(order_id: int, db:Session = Depends(get_db)):
-  order = db.query(models.Order).filter(models.Order.id == order_id).first()
-  if not order:
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 
-  return order
+@router.post("/{order_id}/cancel", response_model=schemas.OrderResponse, status_code=status.HTTP_200_OK)
+def cancel_order(order_id: int, db: Session = Depends(get_db)):
+    # 1. Fetch order and validate existence
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
 
-  
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 
+    # 2. Check cancellation eligibility
+    if order.status == "CANCELLED":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Order is already cancelled")
+
+    try:
+        # 3. Lock target product row for update
+        product = db.query(models.Product).filter(models.Product.id == order.product_id).with_for_update().first()
+
+        if not product:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Associated product not found")
+
+        # 4. Restore stock & mutate order state
+        product.inventory += order.quantity
+        order.status = "CANCELLED"
+
+        # 5. Create immutable audit ledger log
+        restock_log = models.StockTransaction(
+            product_id=product.id,
+            quantity_change=order.quantity,
+            transaction_type=schemas.TransactionTypeEnum.RESTOCK
+        )
+        db.add(restock_log)
+
+        # 6. Commit atomic transaction
+        db.commit()
+        db.refresh(order)
+        return order
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process cancellation"
+        )

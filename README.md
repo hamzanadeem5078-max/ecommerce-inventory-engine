@@ -202,3 +202,22 @@ Technical Execution: Constructed atomic ACID checkout pipelines inside an explic
 The Analogy: A customer returns with an Order ID. You open the order vault, check whether the receipt exists, verify the contents against the items list, and present a clean statement detailing items bought and total price paid.
 
 Technical Execution: Designed GET /orders/{order_id} with object-relational mapping to return serialized order metadata and nested order line-items cleanly.
+
+
+
+## Day 39: Order Cancellation & Race-Free Inventory Restoration
+
+Mental Model: The Strict Warehouse Clerk
+Processing an order cancellation isn't as simple as dropping items back on a shelf. Imagine a customer bringing a receipt to the warehouse return counter:
+
+1. **Check the Paperwork First (Entity Lookup Sequence):** The clerk cannot walk over and lock a product bin until they read the receipt (`Order`) to find out *which* specific product bin (`product_id`) needs restocking. (Attempting to query `Product` directly via `order_id` puts the cart before the horse and triggers accidental SQL cross-joins).
+2. **Lock the Physical Bin (`with_for_update()`):** Before adding items back, the clerk places a physical padlock on that specific product's bin. This prevents a flash sale buyer from snatching stock out of the bin mid-count, completely eliminating race conditions.
+3. **Restock & Update Ledger:** The clerk adds the items back to the bin (`product.inventory += order.quantity`), stamps the receipt as `CANCELLED`, and logs an immutable paper trail in the transaction tracker (`RESTOCK: +N items`).
+4. **Atomic Handshake (Commit/Rollback):** If the counter falls over or an error occurs mid-restock, the entire transaction aborts cleanly (`db.rollback()`), leaving stock levels untouched. If everything checks out, the clerk locks the entry into the official register (`db.commit()`) and unlocks the product bin.
+
+---
+
+### Key Technical Learnings & Pitfalls
+* **Avoiding Implicit Cross-Joins:** Querying `db.query(models.Product).filter(models.Order.id == order_id)` causes SQLAlchemy to generate an unintended Cartesian product. Always fetch the `Order` record first, extract `order.product_id`, and query `models.Product` explicitly using the target foreign key.
+* **Pessimistic Concurrency Control:** Wrapping the product query with `.with_for_update()` issues a `SELECT ... FOR UPDATE` statement at the database layer. This ensures that concurrent API requests attempting to read or mutate the same product row block gracefully until the cancellation transaction finishes.
+* **Audit Trail Integrity:** Inventory should never mutate in a vacuum. Every restocking action creates an explicit `StockTransaction` ledger entry within the same atomic database transaction block.
