@@ -56,6 +56,7 @@ class Order(Base):
   product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
   quantity = Column(Integer, nullable=False)
   total_price = Column(Float, nullable=False)
+  status = Column(String, default="PENDING", nullable=False)
   created_at = Column(
       DateTime(timezone=True), server_default=func.now(), nullable=False
   )

@@ -221,3 +221,29 @@ Processing an order cancellation isn't as simple as dropping items back on a she
 * **Avoiding Implicit Cross-Joins:** Querying `db.query(models.Product).filter(models.Order.id == order_id)` causes SQLAlchemy to generate an unintended Cartesian product. Always fetch the `Order` record first, extract `order.product_id`, and query `models.Product` explicitly using the target foreign key.
 * **Pessimistic Concurrency Control:** Wrapping the product query with `.with_for_update()` issues a `SELECT ... FOR UPDATE` statement at the database layer. This ensures that concurrent API requests attempting to read or mutate the same product row block gracefully until the cancellation transaction finishes.
 * **Audit Trail Integrity:** Inventory should never mutate in a vacuum. Every restocking action creates an explicit `StockTransaction` ledger entry within the same atomic database transaction block.
+
+
+
+## Day 40: System Pulse Check & Atomic Lock Boundaries
+
+### Mental Model
+Imagine a high-speed airport terminal handling thousands of passengers a minute. Before opening the gates for peak traffic, the control tower runs a complete end-to-end rehearsal. It radio-checks the tower ("FastAPI to PostgreSQL active?"), verifies the dispatch crew ("Connection pool awake?"), and runs a dry-run flight plan ("Can PostgreSQL process statements cleanly?"). If communication stutters during the drill, no flights board.
+
+### Implementation Notes
+* **Health Readiness Endpoint (`health.py`):** Constructed a router endpoint designed to ping PostgreSQL before major high-concurrency actions hit the engine. It verifies active connectivity, connection pool state, and real-time SQL statement execution.
+* **Architecture Wiring:** Modularized the application structure by wiring `health.py` into `main.py` and aligning models, schemas, and router dependencies.
+
+---
+
+### Errors Encountered & Fixes
+
+#### 1. Disconnected Row Lock Execution (Transaction Boundary Leak)
+* **The Error:** Querying `models.Order` outside the atomic transaction block without a row lock, while locking `models.Product` separately with `.with_for_update()`.
+* **The Root Cause & Risk:** Even though Python holds the object reference in memory, querying state outside the transaction boundary breaks isolation. Under heavy concurrency, this causes session state mismatches and race conditions before the second row locks.
+* **The Fix:** Moved both the `Order` lookup and `Product` lookup inside a single `try` block, binding both entities under the exact same PostgreSQL transaction using `.with_for_update()`:
+
+```python
+# Wrapped inside a single atomic transaction block
+with db.begin():
+    order = db.query(models.Order).filter(...).with_for_update().first()
+    product = db.query(models.Product).filter(...).with_for_update().first()

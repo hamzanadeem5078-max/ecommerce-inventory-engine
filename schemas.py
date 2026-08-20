@@ -113,4 +113,9 @@ class OrderResponse(BaseModel):
 
 
 
+class HealthStatusResponse(BaseModel):
+    status: str
+    database: str
+
+
     
