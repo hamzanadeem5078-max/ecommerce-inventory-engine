@@ -117,5 +117,4 @@ class HealthStatusResponse(BaseModel):
     status: str
     database: str
 
-
-    
+ 
