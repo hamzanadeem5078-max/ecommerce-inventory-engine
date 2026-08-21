@@ -223,7 +223,6 @@ Processing an order cancellation isn't as simple as dropping items back on a she
 * **Audit Trail Integrity:** Inventory should never mutate in a vacuum. Every restocking action creates an explicit `StockTransaction` ledger entry within the same atomic database transaction block.
 
 
-
 ## Day 40: System Pulse Check & Atomic Lock Boundaries
 
 ### Mental Model
@@ -241,16 +240,6 @@ Imagine a high-speed airport terminal handling thousands of passengers a minute.
 * **The Error:** Querying `models.Order` outside the atomic transaction block without a row lock, while locking `models.Product` separately with `.with_for_update()`.
 * **The Root Cause & Risk:** Even though Python holds the object reference in memory, querying state outside the transaction boundary breaks isolation. Under heavy concurrency, this causes session state mismatches and race conditions before the second row locks.
 * **The Fix:** Moved both the `Order` lookup and `Product` lookup inside a single `try` block, binding both entities under the exact same PostgreSQL transaction using `.with_for_update()`:
-
-```python
-# Wrapped inside a single atomic transaction block
-with db.begin():
-    order = db.query(models.Order).filter(...).with_for_update().first()
-    product = db.query(models.Product).filter(...).with_for_update().first()
-
-
-  
-
 
 
 
