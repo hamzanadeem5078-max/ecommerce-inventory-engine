@@ -1,3 +1,4 @@
+import traceback
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from database import get_db
@@ -5,7 +6,7 @@ import models
 import schemas
 from typing import List, Optional
 from datetime import datetime
-
+from fastapi import BackgroundTasks
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
@@ -46,8 +47,8 @@ def create_order(order: schemas.OrderCreate, db: Session = Depends(get_db)):
     # 5. Log the stock transaction in the ledger
     stock_transaction = models.StockTransaction(
         product_id=product.id,
-        change_amount=-order.quantity,
-        transaction_type="PURCHASE",
+        quantity_change=-order.quantity,
+        transaction_type="SALE",
     )
     db.add(stock_transaction)
 
@@ -72,36 +73,46 @@ def create_order(order: schemas.OrderCreate, db: Session = Depends(get_db)):
 
 @router.post("/{order_id}/cancel", response_model=schemas.OrderResponse, status_code=status.HTTP_200_OK)
 def cancel_order(order_id: int, db: Session = Depends(get_db)):
-    # 1. Fetch order and validate existence
-    order = db.query(models.Order).filter(models.Order.id == order_id).first()
-
-    if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
-
-    # 2. Check cancellation eligibility
-    if order.status == "CANCELLED":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Order is already cancelled")
-
     try:
-        # 3. Lock target product row for update
-        product = db.query(models.Product).filter(models.Product.id == order.product_id).with_for_update().first()
+        # 1. Lock the order row first
+        order = (
+            db.query(models.Order)
+            .filter(models.Order.id == order_id)
+            .with_for_update()
+            .first()
+        )
+
+        if not order:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+        # 2. Check cancellation eligibility
+        if order.status == "CANCELLED":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Order is already cancelled")
+
+        # 3. Lock target product row
+        product = (
+            db.query(models.Product)
+            .filter(models.Product.id == order.product_id)
+            .with_for_update()
+            .first()
+        )
 
         if not product:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Associated product not found")
 
-        # 4. Restore stock & mutate order state
-        product.inventory += order.quantity
+        # 4. Mutate states in memory
         order.status = "CANCELLED"
+        product.inventory += order.quantity
 
-        # 5. Create immutable audit ledger log
+        # 5. Append immutable audit log
         restock_log = models.StockTransaction(
             product_id=product.id,
             quantity_change=order.quantity,
-            transaction_type=schemas.TransactionTypeEnum.RESTOCK
+            transaction_type=models.TransactionTypeEnum.RESTOCK
         )
         db.add(restock_log)
 
-        # 6. Commit atomic transaction
+        # 6. Commit atomic unit of work
         db.commit()
         db.refresh(order)
         return order
@@ -115,3 +126,23 @@ def cancel_order(order_id: int, db: Session = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process cancellation"
         )
+
+
+
+
+def send_order_notification(order_id: int, email: str):
+    print(f"Processing notification for Order #{order_id} to {email}")
+
+@router.post("/orders/checkout")
+def checkout(
+    order_data: schemas.OrderCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    # Dynamic DB values represented as placeholders
+    order_id = 101
+    email = "customer@example.com"
+    
+    background_tasks.add_task(send_order_notification, order_id, email)
+    
+    return {"status": "Order placed successfully", "order_id": order_id}
