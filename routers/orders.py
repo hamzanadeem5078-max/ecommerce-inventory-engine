@@ -7,8 +7,10 @@ import schemas
 from typing import List, Optional
 from datetime import datetime
 from fastapi import BackgroundTasks
+import logging
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
@@ -131,7 +133,12 @@ def cancel_order(order_id: int, db: Session = Depends(get_db)):
 
 
 def send_order_notification(order_id: int, email: str):
-    print(f"Processing notification for Order #{order_id} to {email}")
+    try:
+        print(f"Processing notification for Order #{order_id} to {email}")
+
+    except Exception as exc:
+       logger.error(f"Background task failed for order id {order_id}: {str(exc)}", exc_info=True)
+       
 
 @router.post("/orders/checkout")
 def checkout(
