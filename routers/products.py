@@ -1,10 +1,15 @@
+import json
 from datetime import datetime
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, joinedload
+
 from database import get_db
 import models
+from redis_db import redis_client
 from schemas import (
     ProductSchema,
     ProductUpdate,
@@ -71,22 +76,36 @@ def get_products(
 
 
 @router.get("/{product_id}", response_model=ProductResponse)
-def get_product(product_id: int, db: Session = Depends(get_db)):
-    db_product = (
-        db.query(models.Product)
+async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
+    # 1. Check Redis cache
+    cached_data = await redis_client.get(f"product:{product_id}")
+    if cached_data:
+        return json.loads(cached_data)
+
+    # 2. Query PostgreSQL on Cache Miss
+    result = await db.execute(
+        select(models.Product)
         .options(joinedload(models.Product.category))
-        .filter(models.Product.id == product_id)
-        .first()
+        .where(models.Product.id == product_id)
     )
-    if not db_product:
+    product = result.scalars().first()
+
+    # 3. Guard against 404
+    if not product:
         raise HTTPException(
             status_code=404, detail=f"Product with id {product_id} not found"
         )
 
-    return db_product
+    # 4. Store in Redis for future requests (5-min TTL)
+    product_data = ProductResponse.model_validate(product).model_dump_json()
+    await redis_client.set(f"product:{product_id}", product_data, ex=300)
+
+    # 5. Return the ORM product model
+    return product
+
 
 @router.patch("/{product_id}", response_model=ProductResponse)
-def update_product(
+async def update_product(
     product_id: int, payload: ProductUpdate, db: Session = Depends(get_db)
 ):
     db_product = (
@@ -118,6 +137,10 @@ def update_product(
 
         db.commit()
         db.refresh(db_product)
+
+        # Cache Invalidation
+        await redis_client.delete(f"product:{product_id}")
+
         return db_product
 
     except Exception as e:
@@ -126,7 +149,7 @@ def update_product(
 
 
 @router.delete("/{product_id}")
-def delete_product(product_id: int, db: Session = Depends(get_db)):
+async def delete_product(product_id: int, db: Session = Depends(get_db)):
     product_check = db.get(models.Product, product_id)
 
     if not product_check:
@@ -135,6 +158,10 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     try:
         db.delete(product_check)
         db.commit()
+
+        # Cache Invalidation
+        await redis_client.delete(f"product:{product_id}")
+
         return {"message": "Product successfully deleted"}
     except Exception as e:
         db.rollback()
@@ -144,14 +171,16 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
 @router.post(
     "/{product_id}/transactions", response_model=StockTransactionResponse
 )
-
-def create_stock_transaction(
+async def create_stock_transaction(
     product_id: int,
     transaction: StockTransactionCreate,
     db: Session = Depends(get_db),
 ):
     product = (
-        db.query(models.Product).filter(models.Product.id == product_id).with_for_update().first()
+        db.query(models.Product)
+        .filter(models.Product.id == product_id)
+        .with_for_update()
+        .first()
     )
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -169,6 +198,10 @@ def create_stock_transaction(
         db.commit()
         db.refresh(new_transaction)
         db.refresh(product)
+
+        # Invalidate stock-sensitive cache entry
+        await redis_client.delete(f"product:{product_id}")
+
         return new_transaction
 
     except Exception as e:

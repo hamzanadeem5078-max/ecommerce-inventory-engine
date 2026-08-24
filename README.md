@@ -275,3 +275,24 @@ Imagine a stadium concert where 1,000 fans arrive at the gate simultaneously:
 * Implemented `redis.asyncio` using `ConnectionPool.from_url()` with a bounded limit of `max_connections=10` and `decode_responses=True` to auto-parse incoming byte streams into UTF-8 strings.
 * Interfaced the persistent `redis_client` inside FastAPI's async `lifespan` context manager to cleanly yield control on app startup and explicitly call `await redis_db.redis_client.close()` during server shutdown.
 * **Edge Case Debugged:** Encountered serialization/connection handshake errors with older Redis server instances; resolved by explicitly passing `protocol=2` (RESP2) within the connection pool configuration.
+
+
+## Day 44: Cache Read-Aside & Active Invalidation
+
+### System Architecture & Behavior
+*   **Cache Read-Aside Pattern**: Intercepts `GET /products/{id}` requests at the memory layer using Redis. On cache hits, bypasses PostgreSQL disk IO completely by deserializing Redis strings into response payloads.
+*   **Active Cache Invalidation**: Enforces cache coherence across state-mutating operations (`PATCH`, `DELETE`, and stock transactions). Modifying underlying PostgreSQL records triggers an explicit eviction (`redis_client.delete(f"product:{product_id}")`) to eliminate stale reads within the 300-second TTL window.
+
+### Production Edge Cases & Bug Resolution Log
+*   **Null Entity Serialization Leak**
+    *   *Root Cause*: Unchecked ORM lookup returning `None` passed directly into Pydantic schema serialization handlers prior to cache write logic.
+    *   *The Failure*: Non-existent product queries threw unhandled schema validation exceptions (`500 Internal Server Error`) instead of clean domain responses.
+    *   *The Systems Fix*: Implemented a non-null guard check immediately following the database query, raising an early `404 HTTPException` prior to serialization or Redis invocation.
+*   **Double-Serialization Payload Corruption**
+    *   *Root Cause*: Returning pre-serialized JSON strings directly from the endpoint on cache misses, triggering FastAPI's automatic response encoder on already-encoded data.
+    *   *The Failure*: Over-the-wire response payloads were stringified twice (escaped quotes and extra string wrappers), breaking API contract specifications for downstream clients.
+    *   *The Systems Fix*: Unified execution paths: return domain ORM objects on cache misses to leverage native FastAPI response encoding, and explicitly parse stringified payloads via `json.loads()` on cache hits.
+*   **Stale Read Inconsistency across State Mutation**
+    *   *Root Cause*: Write operations updated the relational store without signaling the memory layer, creating temporal cache-database drift equal to the full 300s TTL.
+    *   *The Failure*: Updating or soft-deleting products served stale state to clients for up to 5 minutes post-commit.
+    *   *The Systems Fix*: Integrated atomic cache eviction calls directly into write transaction handlers immediately following PostgreSQL commits.
