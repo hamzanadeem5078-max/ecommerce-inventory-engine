@@ -1,7 +1,8 @@
 import json
 from datetime import datetime
 from typing import Optional
-
+import logging
+from redis.exceptions import RedisError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,7 @@ from schemas import (
     StockTransactionResponse,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/products", tags=["Products"])
 
 
@@ -77,31 +79,56 @@ def get_products(
 
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
-    # 1. Check Redis cache
-    cached_data = await redis_client.get(f"product:{product_id}")
-    if cached_data:
-        return json.loads(cached_data)
+    cache_key = f"product:{product_id}"
+    lock_key = f"lock:product:{product_id}"
 
-    # 2. Query PostgreSQL on Cache Miss
-    result = await db.execute(
-        select(models.Product)
-        .options(joinedload(models.Product.category))
-        .where(models.Product.id == product_id)
-    )
-    product = result.scalars().first()
+    # 1. Fast Path: Resilient Redis Cache Read
+    try:
+        cached_data = await redis_client.get(cache_key)
+        if cached_data:
+            return json.loads(cached_data)
+    except RedisError as e:
+        logger.error(f"Redis cache read failed for product {product_id}: {e}")
 
-    # 3. Guard against 404
-    if not product:
-        raise HTTPException(
-            status_code=404, detail=f"Product with id {product_id} not found"
+    # 2. Cache Miss: Stampede Shielding via Distributed Lock
+    try:
+        async with redis_client.lock(lock_key, timeout=5):
+            # Double-Check Redis Cache inside lock
+            cached_data = await redis_client.get(cache_key)
+            if cached_data:
+                return json.loads(cached_data)
+
+            # Query PostgreSQL if still a miss
+            result = await db.execute(
+                select(models.Product)
+                .options(joinedload(models.Product.category))
+                .where(models.Product.id == product_id)
+            )
+            product = result.scalars().first()
+
+            if not product:
+                raise HTTPException(
+                    status_code=404, detail=f"Product with id {product_id} not found"
+                )
+
+            product_data = ProductResponse.model_validate(product).model_dump_json()
+            await redis_client.set(cache_key, product_data, ex=300)
+            return product
+
+    except RedisError as e:
+        # Fallback Path: If Redis locking service fails entirely, query DB directly
+        logger.error(f"Redis lock/cache operation failed for product {product_id}: {e}")
+        result = await db.execute(
+            select(models.Product)
+            .options(joinedload(models.Product.category))
+            .where(models.Product.id == product_id)
         )
-
-    # 4. Store in Redis for future requests (5-min TTL)
-    product_data = ProductResponse.model_validate(product).model_dump_json()
-    await redis_client.set(f"product:{product_id}", product_data, ex=300)
-
-    # 5. Return the ORM product model
-    return product
+        product = result.scalars().first()
+        if not product:
+            raise HTTPException(
+                status_code=404, detail=f"Product with id {product_id} not found"
+            )
+        return product
 
 
 @router.patch("/{product_id}", response_model=ProductResponse)

@@ -296,3 +296,15 @@ Imagine a stadium concert where 1,000 fans arrive at the gate simultaneously:
     *   *Root Cause*: Write operations updated the relational store without signaling the memory layer, creating temporal cache-database drift equal to the full 300s TTL.
     *   *The Failure*: Updating or soft-deleting products served stale state to clients for up to 5 minutes post-commit.
     *   *The Systems Fix*: Integrated atomic cache eviction calls directly into write transaction handlers immediately following PostgreSQL commits.
+
+
+
+## Day 45: Resilient Redis Read-Aside Fallback & Distributed Lock Stampede Shielding
+
+### System Architecture & Behavior
+Our product retrieval service follows a read-aside caching pattern, backed by an in-memory Redis cluster for low-latency lookups and PostgreSQL as the source of truth. Under high-concurrency traffic, cold cache keys or unexpected infrastructure degradation (e.g., Redis cluster disconnects, network partition, memory pressure timeouts) expose two primary single points of failure:
+
+* **Uncaught Cache Driver Exceptions:** Standard async Redis client interactions throw driver-level exceptions (`RedisError`, `ConnectionError`, `TimeoutError`) when Redis is unreachable. Without explicit exception boundaries, an infrastructure failure in the caching tier bubbles up as an HTTP `500 Internal Server Error`, crashing read operations even when PostgreSQL is fully operational.
+* **Cache Stampede (Thundering Herd):** When a high-demand product key expires or invalidates under heavy read traffic, hundreds of concurrent requests experience a simultaneous cache miss. Without synchronization, all requests bypass the caching layer and query PostgreSQL at the exact same millisecond, triggering DB CPU spike to 100% and connection pool exhaustion.
+
+To mitigate this, we implemented a dual-layer resilient read-aside pipeline using Distributed Mutex Locking (Stampede Shielding) and Fail-Safe Exception Catching.
