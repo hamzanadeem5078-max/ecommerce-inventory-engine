@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Depends
 from database import engine, Base
 import models
-from routers import categories, products, inventory,health,orders
-from contextlib import asynccontextmanager
 import redis_db
+from dependencies import rate_limit_guard
+from routers import categories, products, inventory, health, orders
 
 # Fires the machinery to look at models and build them in Postgres
 Base.metadata.create_all(bind=engine)
@@ -13,7 +14,11 @@ async def lifespan(app: FastAPI):
     yield
     await redis_db.redis_client.close()
 
-app = FastAPI(lifespan=lifespan)
+# Initialize FastAPI once with BOTH lifespan and global rate limiting
+app = FastAPI(
+    lifespan=lifespan,
+    dependencies=[Depends(rate_limit_guard)]
+)
 
 # Include routers
 app.include_router(categories.router)
@@ -26,9 +31,6 @@ app.include_router(orders.router)
 async def root():
     return {"message": "Welcome to the Flash Sale Engine!"}
 
-
-
-
 @app.get("/redis-test")
 async def test_redis():
     # Set a key in Redis
@@ -38,3 +40,8 @@ async def test_redis():
     val = await redis_db.redis_client.get("engine_status")
     
     return {"redis_status": val}
+
+# Route is already protected by the global dependency in app = FastAPI(...)
+@app.get("/test-rate-limit")
+async def test_rate_limit():
+    return {"message": "Access granted!"}

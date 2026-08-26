@@ -308,3 +308,10 @@ Our product retrieval service follows a read-aside caching pattern, backed by an
 * **Cache Stampede (Thundering Herd):** When a high-demand product key expires or invalidates under heavy read traffic, hundreds of concurrent requests experience a simultaneous cache miss. Without synchronization, all requests bypass the caching layer and query PostgreSQL at the exact same millisecond, triggering DB CPU spike to 100% and connection pool exhaustion.
 
 To mitigate this, we implemented a dual-layer resilient read-aside pipeline using Distributed Mutex Locking (Stampede Shielding) and Fail-Safe Exception Catching.
+
+
+### Day 46: Distributed Rate Limiting via Redis Sliding Window Logs
+
+#### System Architecture & Behavior
+Implemented a high-concurrency sliding window rate-limiting middleware (`rate_limit_guard`) leveraging Redis Sorted Sets (ZSETs). Each incoming request is identified by client IP, using Unix timestamps for both scores and unique element members. The dependency dynamically evicts obsolete logs via `ZREMRANGEBYSCORE`, evaluates active timestamp density via `ZCARD`, and pushes current execution timestamps with a sliding key TTL using `EXPIRE`.
+
