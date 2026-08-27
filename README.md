@@ -315,3 +315,17 @@ To mitigate this, we implemented a dual-layer resilient read-aside pipeline usin
 #### System Architecture & Behavior
 Implemented a high-concurrency sliding window rate-limiting middleware (`rate_limit_guard`) leveraging Redis Sorted Sets (ZSETs). Each incoming request is identified by client IP, using Unix timestamps for both scores and unique element members. The dependency dynamically evicts obsolete logs via `ZREMRANGEBYSCORE`, evaluates active timestamp density via `ZCARD`, and pushes current execution timestamps with a sliding key TTL using `EXPIRE`.
 
+
+
+## Day 47: Distributed Locking for Flash Sale Inventory with Redis
+
+### System Architecture & Behavior
+* **Distributed Mutex Boundary:** Implemented a Redis-backed distributed lock guard using `redis-py`'s mutex protocol managed via a `@contextmanager` generator in `dependencies.py`.
+* **Resource Isolation:** Enforced product-level key namespacing (`lock:product:{product_id}`) to serialize access to individual SKU stock mutations across multi-instance application deployments before reaching the relational database layer.
+* **Bounded Queueing & Fail-Fast Throttling:** Configured `blocking_timeout=2.0` to bound wait times for competing concurrent threads. Requests exceeding the wait threshold fail fast with an `HTTP 429 Too Many Requests` status code, shielding downstream DB connection pools.
+* **Deadlock Resilience:** Standardized `timeout=5.0` (TTL) on lock acquisition to guarantee automatic key expiry in the event of an unhandled application process crash or worker drop within the critical execution section.
+
+### Production Edge Cases & Bug Resolution Log
+* **Root Cause:** Standard functional helper execution (`return True` inside `with lock:`) causes immediate release of the Redis lock prior to route execution, allowing parallel workers to read stale inventory states simultaneously.
+* **The Failure:** Database row locking alone (`.with_for_update()`) absorbed the entire burst traffic under high concurrency, leading to PostgreSQL connection pool starvation and elevated request latency.
+* **The Systems Fix:** Converted the lock utility into a yielding context manager (`redis_lock_guard`), keeping the lock active strictly across the full duration of the underlying PostgreSQL transaction commit before releasing the key card.
