@@ -1,28 +1,27 @@
-import time
-from fastapi import Request, HTTPException, status
-from redis_db import redis_client
+from contextlib import contextmanager
+from fastapi import HTTPException, status
+from redis.exceptions import LockError
+from redis_db import get_redis_client # Or your existing Redis import name
 
-async def rate_limit_guard(request: Request):
-    client_ip = request.client.host
-    current_time = time.time()
-    
-    window_seconds = 10
-    max_requests = 5
-    cutoff_time = current_time - window_seconds
-    
-    # Step 2: Wipe stamps older than cutoff window
-    await redis_client.zremrangebyscore(f"rate_limit:{client_ip}", 0, cutoff_time)
-    
-    # Step 3: Count remaining valid stamps
-    request_count = await redis_client.zcard(f"rate_limit:{client_ip}")
-    
-    # Step 4: Block or Allow
-    if request_count >= max_requests:
+
+def get_product_lock(redis_client, product_id: int):
+    lock_key = f"lock:product:{product_id}"
+    return redis_client.lock(
+        name=lock_key,
+        timeout=5.0,          # TTL: Auto-release after 5s if worker crashes
+        blocking_timeout=2.0  # Queue Limit: Wait up to 2s in line
+    )
+
+
+@contextmanager
+def redis_lock_guard(product_id: int, redis_client):
+    lock = get_product_lock(redis_client, product_id)
+    try:
+        with lock:
+            # Yield control to the caller while holding the lock
+            yield lock
+    except LockError:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please try again later."
+            detail="High traffic volume. Could not acquire lock, please try again."
         )
-        
-    # Add new stamp & reset TTL
-    await redis_client.zadd(f"rate_limit:{client_ip}", {str(current_time): current_time})
-    await redis_client.expire(f"rate_limit:{client_ip}", window_seconds)
