@@ -329,3 +329,9 @@ Implemented a high-concurrency sliding window rate-limiting middleware (`rate_li
 * **Root Cause:** Standard functional helper execution (`return True` inside `with lock:`) causes immediate release of the Redis lock prior to route execution, allowing parallel workers to read stale inventory states simultaneously.
 * **The Failure:** Database row locking alone (`.with_for_update()`) absorbed the entire burst traffic under high concurrency, leading to PostgreSQL connection pool starvation and elevated request latency.
 * **The Systems Fix:** Converted the lock utility into a yielding context manager (`redis_lock_guard`), keeping the lock active strictly across the full duration of the underlying PostgreSQL transaction commit before releasing the key card.
+
+
+
+## Day 48: Resilient Cache Invalidation & Post-Commit Data Synchronization
+System Architecture & Behavior
+To guarantee eventual consistency between the PostgreSQL relational store and the high-speed Redis read layer, all write mutation paths (PATCH /products/{id}, DELETE /products/{id}, and POST /products/{id}/stock) now execute explicit post-commit cache invalidation. The architecture enforces an strict order of operations: database transactions must fully commit to PostgreSQL prior to clearing the target key (product:{product_id}) from Redis. Subsequent read requests incur an intentional cache miss, fetching fresh database state and repopulating the Redis cache ("repainting the entrance menu board"). Cache invalidation calls are wrapped in non-blocking exception handlers targeting RedisError, ensuring that caching layer outages never roll back committed relational transactions or return HTTP 500 status codes to clients.
