@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, joinedload
-
+import logging
 from database import get_db
 import models
 from redis_db import redis_client
@@ -20,7 +20,7 @@ from schemas import (
 )
 
 router = APIRouter(prefix="/products", tags=["Products"])
-
+logger = logging.getLogger(__name__)
 
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 async def create_product(payload: ProductSchema, db: Session = Depends(get_db)):
@@ -126,12 +126,32 @@ async def update_product(
         db.commit()
         db.refresh(db_product)
 
-        # Resilient Cache Invalidation
+        # Write-Through Caching Pattern
         try:
-            await redis_client.delete(f"product:{product_id}")
+            cached_data = json.dumps(
+                {
+                    "id": db_product.id,
+                    "name": db_product.name,
+                    "description": db_product.description,
+                    "price": float(db_product.price),
+                    "stock": db_product.stock,
+                    "category_id": db_product.category_id,
+                    "category": {
+                        "id": db_product.category.id,
+                        "name": db_product.category.name,
+                    } if db_product.category else None,
+                }
+            )
+
+            # Instantly update Redis cache with new state (5-min TTL margin)
+            await redis_client.setex(
+                f"product:{product_id}",
+                300,
+                cached_data,
+            )
         except RedisError as e:
             logger.warning(
-                f"Failed to invalidate cache key product:{product_id}: {e}"
+                f"Failed to update write-through cache for key product:{product_id}: {e}"
             )
 
         return db_product
@@ -143,7 +163,6 @@ async def update_product(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update product: {str(e)}",
         )
-
 
 @router.delete("/{product_id}")
 async def delete_product(product_id: int, db: Session = Depends(get_db)):

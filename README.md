@@ -335,3 +335,18 @@ Implemented a high-concurrency sliding window rate-limiting middleware (`rate_li
 ## Day 48: Resilient Cache Invalidation & Post-Commit Data Synchronization
 System Architecture & Behavior
 To guarantee eventual consistency between the PostgreSQL relational store and the high-speed Redis read layer, all write mutation paths (PATCH /products/{id}, DELETE /products/{id}, and POST /products/{id}/stock) now execute explicit post-commit cache invalidation. The architecture enforces an strict order of operations: database transactions must fully commit to PostgreSQL prior to clearing the target key (product:{product_id}) from Redis. Subsequent read requests incur an intentional cache miss, fetching fresh database state and repopulating the Redis cache ("repainting the entrance menu board"). Cache invalidation calls are wrapped in non-blocking exception handlers targeting RedisError, ensuring that caching layer outages never roll back committed relational transactions or return HTTP 500 status codes to clients.
+
+
+
+
+
+## Day 49: Write-Through vs. Write-Around Caching Patterns for High-Throughput Inventory Operations
+
+Day 49 introduces a Write-Through Caching Strategy within the `update_product` mutation path to eliminate the read-miss latency window inherent to Cache-Aside / Write-Around strategies. Upon receiving an inventory update payload, the system commits the relational mutation to PostgreSQL, reloads the committed model state, and immediately serializes the normalized product model into JSON. The updated payload is directly written to Redis via an asynchronous `setex` operation with a 300-second TTL. Subsequent read operations hitting the fast-path in-memory store instantly retrieve active, synchronized stock levels without incurring database trip penalties or intermediate cache invalidation windows.
+
+### Production Edge Cases & Bug Resolution Log
+Root Cause: Executing in-memory write-through operations prior to relational transaction isolation or commit guarantees can create cross-system state drift if PostgreSQL rollbacks occur. Additionally, direct serialization of unhandled ORM types (`Decimal`) inside JSON payloads causes unhandled runtime exceptions.
+
+The Failure: If the database transaction aborts or fails constraint validation after the cache layer update, Redis maintains phantom state that diverges from persistent disk storage. Furthermore, passing raw SQLAlchemy `Decimal` price fields directly to standard `json.dumps` throws `TypeError: Object of type Decimal is not JSON serializable`, aborting the request mid-flight.
+
+The System Fix: Wrapped the write-through cache execution block strictly *after* `db.commit()` and `db.refresh(db_product)` to guarantee ACID transaction durability before cache mutation. Handled type safety by explicitly casting numeric ORM types (`float(db_product.price)`) and nested relational schemas before pushing payloads to Redis via `await redis_client.setex()`. Isolated Redis driver errors in a targeted `try/except RedisError` block to prevent cache layer transport issues from bubbling up as HTTP 500 errors to client callers.
