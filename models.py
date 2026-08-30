@@ -25,7 +25,8 @@ class Product(Base):
 
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     category = relationship("Category", back_populates="products")
-    transactions = relationship("StockTransaction", back_populates="product")
+    transactions = relationship("StockTransaction", back_populates="product",cascade="all, delete-orphan")
+    orders = relationship( "Order", back_populates="product", cascade="all, delete-orphan")
 
 
 class TransactionTypeEnum(str, enum.Enum):
@@ -57,6 +58,7 @@ class Order(Base):
   quantity = Column(Integer, nullable=False)
   total_price = Column(Float, nullable=False)
   status = Column(String, default="PENDING", nullable=False)
+  product = relationship("Product", back_populates="orders")
   created_at = Column(
       DateTime(timezone=True), server_default=func.now(), nullable=False
   )

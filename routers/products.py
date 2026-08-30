@@ -128,26 +128,11 @@ async def update_product(
 
         # Write-Through Caching Pattern
         try:
-            cached_data = json.dumps(
-                {
-                    "id": db_product.id,
-                    "name": db_product.name,
-                    "description": db_product.description,
-                    "price": float(db_product.price),
-                    "stock": db_product.stock,
-                    "category_id": db_product.category_id,
-                    "category": {
-                        "id": db_product.category.id,
-                        "name": db_product.category.name,
-                    } if db_product.category else None,
-                }
-            )
-
-            # Instantly update Redis cache with new state (5-min TTL margin)
+            product_schema = ProductResponse.model_validate(db_product)
             await redis_client.setex(
                 f"product:{product_id}",
                 300,
-                cached_data,
+                product_schema.model_dump_json(),
             )
         except RedisError as e:
             logger.warning(
