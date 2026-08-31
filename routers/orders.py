@@ -11,6 +11,7 @@ from dependencies import redis_lock_guard  # Day 47 Distributed Lock
 import models
 from redis_db import get_redis_client      # Redis client dependency
 import schemas
+from event_producer import EventProducer   # Day 51 Event Producer
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ def send_order_notification(order_id: int, email: str):
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.OrderResponse)
-def create_order(
+async def create_order(
     order: schemas.OrderCreate, 
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -81,6 +82,24 @@ def create_order(
             # 7. Queue non-blocking notification task
             background_tasks.add_task(send_order_notification, new_order.id, "customer@example.com")
 
+            # 8. Day 51: Non-blocking event emission to Redis Stream
+            try:
+                producer = EventProducer(redis_client=redis_client)
+                await producer.publish_event(
+                    stream_name="orders:events",
+                    event_type="order.created",
+                    payload={
+                        "order_id": new_order.id,
+                        "product_id": new_order.product_id,
+                        "quantity": new_order.quantity,
+                        "total_price": float(new_order.total_price),
+                        "status": new_order.status
+                    }
+                )
+            except Exception as ev_exc:
+                # Event publishing failure must never fail the committed DB transaction
+                logger.error(f"[Event Emission Error] Order #{new_order.id}: {str(ev_exc)}")
+
             return new_order
 
         except HTTPException as he:
@@ -95,7 +114,7 @@ def create_order(
 
 
 @router.post("/{order_id}/cancel", response_model=schemas.OrderResponse, status_code=status.HTTP_200_OK)
-def cancel_order(
+async def cancel_order(
     order_id: int, 
     db: Session = Depends(get_db),
     redis_client = Depends(get_redis_client)
@@ -152,6 +171,23 @@ def cancel_order(
             # 6. Commit atomic unit of work
             db.commit()
             db.refresh(order)
+
+            # 7. Day 51: Non-blocking cancellation event emission
+            try:
+                producer = EventProducer(redis_client=redis_client)
+                await producer.publish_event(
+                    stream_name="orders:events",
+                    event_type="order.cancelled",
+                    payload={
+                        "order_id": order.id,
+                        "product_id": order.product_id,
+                        "restocked_quantity": order.quantity,
+                        "status": order.status
+                    }
+                )
+            except Exception as ev_exc:
+                logger.error(f"[Event Emission Error] Cancellation Order #{order.id}: {str(ev_exc)}")
+
             return order
 
     except HTTPException:
@@ -166,11 +202,11 @@ def cancel_order(
 
 
 @router.post("/checkout", status_code=status.HTTP_201_CREATED)
-def checkout(
+async def checkout(
     order_data: schemas.OrderCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     redis_client = Depends(get_redis_client)
 ):
     # Route delegate into the main locked create_order workflow
-    return create_order(order=order_data, background_tasks=background_tasks, db=db, redis_client=redis_client)
+    return await create_order(order=order_data, background_tasks=background_tasks, db=db, redis_client=redis_client)
