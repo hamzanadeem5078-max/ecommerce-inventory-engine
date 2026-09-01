@@ -362,3 +362,20 @@ To prevent silent inventory overselling during high-concurrency flash sales, an 
 To prevent non-critical downstream side effects (e.g., transactional emails, analytics processing, third-party syncs) from inflating HTTP request latency during high-throughput checkout bursts, Phase 3 introduces an asynchronous, event-driven producer layer.
 
 Using **Redis Streams (`XADD`)**, the primary API thread acts as an event producer. Upon successful state transitions inside PostgreSQL, the main thread serializes immutable, schema-validated Pydantic payloads into standard dictionary formats and appends them to a persistent Redis Stream log before returning an instant `202 Accepted` or `201 Created` response to the client.
+
+
+## Day 52: Asynchronous Event Consumer & Worker Loop
+
+### System Architecture & Behavior
+* **Asynchronous Decoupled Consumer Loop:** Architected a standalone, non-blocking Python worker process using `asyncio` and `redis-py` to continuously consume order events from Redis Streams (`XREADGROUP`) independent of primary API server threads.
+* **Consumer Group Orchestration & Load Distribution:** Leveraged Redis Consumer Groups (`inventory_workers`) to dynamically partition stream events using the `>` ID state, enabling linear horizontal scaling across multiple worker replicas without risk of redundant event processing.
+* **Strict ACK-Last Processing Invariant:** Enforced downstream state mutation integrity by executing the `XACK` acknowledgment call strictly *after* successful message parsing and DB transaction execution, ensuring unacknowledged messages remain safely in the Redis Pending Entries List (PEL) during worker crashes.
+* **Poison Pill Isolation Boundaries:** Standardized ingestion through an explicit `EventEnvelopeSchema` boundary, isolating malformed JSON payloads (`json.JSONDecodeError`) or schema invariant breaches (`ValidationError`) from transient infrastructure failures.
+
+---
+
+### Production Edge Cases & Bug Resolution Log
+
+* **Root Cause:** Raw payloads published to Redis Streams were serialized as nested JSON strings under a binary/string key (`payload`). When consumed via `XREADGROUP`, byte-string dict keys caused Pydantic deserialization crashes, while unhandled schema mismatches (Poison Pills) caused continuous loop re-execution cycles that blocked stream processing.
+* **The Failure:** Worker process threw unhandled `ValidationError` exceptions upon reading malformed messages, trapping bad payloads in the Pending Entries List (PEL). On worker restarts, re-polling the stream continuously re-triggered the invalid message error, completely deadlocking queue progression.
+* **The Systems Fix:** Decoded incoming byte structures into standard UTF-8 strings and parsed inner payload fields prior to Pydantic instantiation. Implemented an explicit dual-tier error handler: malformed payload exceptions (`ValidationError`, `JSONDecodeError`) trigger an immediate `XACK` to purge poison pill messages from the stream, whereas unexpected runtime or database failures suppress `XACK` to keep the event safely queued in the PEL for retry routines.
