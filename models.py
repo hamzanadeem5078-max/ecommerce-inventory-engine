@@ -1,11 +1,12 @@
 import enum
 from datetime import datetime
-from database import Base
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, func, Enum
 from sqlalchemy.orm import relationship
 
+import database  # Explicit module import to maintain standard namespace access
 
-class Category(Base):
+
+class Category(database.Base):
     __tablename__ = "categories"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -13,7 +14,7 @@ class Category(Base):
     products = relationship("Product", back_populates="category")
 
 
-class Product(Base):
+class Product(database.Base):
     __tablename__ = "products"
     
     id = Column(Integer, primary_key=True, nullable=False)
@@ -25,8 +26,8 @@ class Product(Base):
 
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     category = relationship("Category", back_populates="products")
-    transactions = relationship("StockTransaction", back_populates="product",cascade="all, delete-orphan")
-    orders = relationship( "Order", back_populates="product", cascade="all, delete-orphan")
+    transactions = relationship("StockTransaction", back_populates="product", cascade="all, delete-orphan")
+    orders = relationship("Order", back_populates="product", cascade="all, delete-orphan")
 
 
 class TransactionTypeEnum(str, enum.Enum):
@@ -35,7 +36,7 @@ class TransactionTypeEnum(str, enum.Enum):
     ADJUSTMENT = "ADJUSTMENT"
 
 
-class StockTransaction(Base):
+class StockTransaction(database.Base):
     __tablename__ = "stock_transactions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -47,18 +48,23 @@ class StockTransaction(Base):
     product = relationship("Product", back_populates="transactions")
 
 
+class Order(database.Base):
+    __tablename__ = "orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    total_price = Column(Float, nullable=False)
+    status = Column(String, default="PENDING", nullable=False)
+    product = relationship("Product", back_populates="orders")
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
+class ProcessedEvent(database.Base):
+    __tablename__ = "processed_events"
 
-class Order(Base):
-  __tablename__ = "orders"
-
-  id = Column(Integer, primary_key=True, index=True)
-  product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-  quantity = Column(Integer, nullable=False)
-  total_price = Column(Float, nullable=False)
-  status = Column(String, default="PENDING", nullable=False)
-  product = relationship("Product", back_populates="orders")
-  created_at = Column(
-      DateTime(timezone=True), server_default=func.now(), nullable=False
-  )
+    event_id = Column(String, primary_key=True, index=True)
+    event_type = Column(String, nullable=False)
+    processed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

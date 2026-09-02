@@ -4,9 +4,13 @@ import logging
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from config import settings
-from schemas import EventEnvelopeSchema, OrderCreate  # Strict Event Envelope boundary
+import config
+import database
+import models
+import schemas
 
 # Configure logging
 logging.basicConfig(
@@ -43,10 +47,55 @@ async def setup_consumer_group(redis_client: Redis):
             raise e
 
 
+async def process_event_idempotently(envelope: schemas.EventEnvelopeSchema, order_event: schemas.OrderCreate) -> bool:
+    """
+    Executes deduplication check, records processed event ledger,
+    and applies domain mutations inside a single atomic database transaction.
+    """
+    async with database.AsyncSessionLocal() as session:
+        try:
+            async with session.begin():  # Explicit atomic transaction boundary
+                # 1. Deduplication Check
+                stmt = select(models.ProcessedEvent).where(models.ProcessedEvent.event_id == envelope.event_id)
+                result = await session.execute(stmt)
+                existing = result.scalar_one_or_none()
+
+                if existing:
+                    logger.warning(f"[IDEMPOTENT SKIP] Duplicate event detected: {envelope.event_id}")
+                    return True  # Idempotent hit: return True so caller dispatches XACK
+
+                # 2. Record event in ProcessedEvent ledger
+                processed_record = models.ProcessedEvent(
+                    event_id=envelope.event_id,
+                    event_type=envelope.event_type
+                )
+                session.add(processed_record)
+
+                # 3. Domain Logic Execution (Example: Order record creation or inventory adjustments)
+                logger.info(
+                    f"[EXECUTING DOMAIN LOGIC] Event ID: {envelope.event_id} | "
+                    f"Product ID: {order_event.product_id} | Qty: {order_event.quantity}"
+                )
+
+                return True  # Auto-commits clean state on exit of session.begin()
+
+        except IntegrityError:
+            # Race condition trap: Concurrent workers attempted writing same event_id simultaneously
+            await session.rollback()
+            logger.warning(f"[RACE CONDITION] Concurrent execution prevented for Event ID: {envelope.event_id}")
+            return True
+
+        except Exception as e:
+            # System/DB outage: Roll back state completely so the worker retries
+            await session.rollback()
+            logger.error(f"[TRANSACTION FAILED] Could not process Event ID {envelope.event_id}: {e}")
+            return False
+
+
 async def parse_and_process_event(message_id: str, message_data: dict, redis_client: Redis):
     """
-    Deserializes raw Redis Stream payload into EventEnvelopeSchema,
-    extracts the payload into OrderCreate, and ACK-lasts strictly after processing.
+    Deserializes raw Redis Stream payload, validates boundaries, calls the idempotent DB handler,
+    and dispatches XACK conditionally upon success.
     """
     try:
         # 1. Convert raw byte keys/values from Redis dictionary to strings
@@ -62,28 +111,29 @@ async def parse_and_process_event(message_id: str, message_data: dict, redis_cli
             decoded_data["payload"] = json.loads(decoded_data["payload"])
 
         # 2. Poison Pill Boundary: Parse through EventEnvelopeSchema
-        envelope = EventEnvelopeSchema(**decoded_data)
+        envelope = schemas.EventEnvelopeSchema(**decoded_data)
         
         # 3. Extract and validate specific order payload
-        order_event = OrderCreate(**envelope.payload)
+        order_event = schemas.OrderCreate(**envelope.payload)
 
-        logger.info(
-            f"[PROCESSING] Event ID: {envelope.event_id} | Type: {envelope.event_type} | "
-            f"Product ID: {order_event.product_id} | Qty: {order_event.quantity}"
-        )
+        # 4. Atomic Idempotent Transaction Execution
+        success = await process_event_idempotently(envelope, order_event)
 
-        # 4. ACK-LAST INVARIANT: Send XACK strictly AFTER work completes
-        await redis_client.xack(STREAM_KEY, GROUP_NAME, message_id)
-        logger.info(f"[ACK] Successfully processed & ACKed Message ID: {message_id}")
+        # 5. CONDITIONAL ACK INVARIANT: Send XACK strictly when state is committed or skipped
+        if success:
+            await redis_client.xack(STREAM_KEY, GROUP_NAME, message_id)
+            logger.info(f"[ACK] Message ID {message_id} acknowledged.")
+        else:
+            logger.warning(f"[RETAIN] Message ID {message_id} un-ACKed. Retained in PEL for retry.")
 
     except (ValidationError, json.JSONDecodeError) as e:
-        # Poison pill payload: ACK immediately so corrupt data doesn't freeze the pipeline
-        logger.error(f"[POISON PILL] Malformed event in message {message_id}: {e}")
+        # Poison pill payload: ACK immediately so corrupt data doesn't block processing
+        logger.error(f"[POISON PILL] Malformed payload in message {message_id}: {e}")
         await redis_client.xack(STREAM_KEY, GROUP_NAME, message_id)
 
     except Exception as e:
-        # System/DB failure: Do NOT ACK! Retain in Redis PEL for safe retry
-        logger.error(f"[SYSTEM FAILURE] Failed executing message {message_id}: {e}")
+        # Unexpected loop/parsing error
+        logger.error(f"[SYSTEM FAILURE] Unexpected error handling message {message_id}: {e}")
 
 
 async def worker_loop(redis_client: Redis):
@@ -123,7 +173,7 @@ async def main():
     """
     Process entrypoint with graceful shutdown signal handling.
     """
-    redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=False)
+    redis_client = Redis.from_url(config.settings.REDIS_URL, decode_responses=False)
 
     try:
         await worker_loop(redis_client)
@@ -134,6 +184,7 @@ async def main():
         logger.info("[SHUTDOWN] Closing Redis connection pool...")
         await redis_client.close()
         logger.info("[SHUTDOWN] Worker process cleanly terminated.")
+
 
 if __name__ == "__main__":
     try:

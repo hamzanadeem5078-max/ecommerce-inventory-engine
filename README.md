@@ -379,3 +379,19 @@ Using **Redis Streams (`XADD`)**, the primary API thread acts as an event produc
 * **Root Cause:** Raw payloads published to Redis Streams were serialized as nested JSON strings under a binary/string key (`payload`). When consumed via `XREADGROUP`, byte-string dict keys caused Pydantic deserialization crashes, while unhandled schema mismatches (Poison Pills) caused continuous loop re-execution cycles that blocked stream processing.
 * **The Failure:** Worker process threw unhandled `ValidationError` exceptions upon reading malformed messages, trapping bad payloads in the Pending Entries List (PEL). On worker restarts, re-polling the stream continuously re-triggered the invalid message error, completely deadlocking queue progression.
 * **The Systems Fix:** Decoded incoming byte structures into standard UTF-8 strings and parsed inner payload fields prior to Pydantic instantiation. Implemented an explicit dual-tier error handler: malformed payload exceptions (`ValidationError`, `JSONDecodeError`) trigger an immediate `XACK` to purge poison pill messages from the stream, whereas unexpected runtime or database failures suppress `XACK` to keep the event safely queued in the PEL for retry routines.
+
+
+## Day 53: Idempotent Event Handler & Database Transaction Integration
+
+### 🎯 Objective
+Guaranteed **At-Least-Once** event processing resilience by implementing an idempotent worker handler pattern that binds event deduplication and business domain state mutations within an atomic PostgreSQL transaction.
+
+### 🛡️ Defensive Engineering & Failure Boundaries
+* **Deduplication Audit Ledger (`ProcessedEvent`):** Designed an explicit tracking table in PostgreSQL indexed on `event_id` to serve as a deterministic execution barrier.
+* **Atomic Transaction Isolation (`session.begin()`):** Enforced a single database session boundary across both event deduplication writes and domain mutations. If network drops or runtime exceptions occur mid-execution, the entire operation auto-rolls back without phantom writes.
+* **PostgreSQL Primary Key Guard:** Handled concurrent race conditions where two parallel workers consume duplicate stream entries at the same millisecond by catching `sqlalchemy.exc.IntegrityError` and acknowledging the message idempotently.
+* **Conditional Redis ACK Invariant:** Redis `XACK` is strictly bound to transaction completion. Messages are ACKed **only** when state is safely committed or identified as a duplicate, keeping transient errors in the Pending Entries List (PEL) for safe retry.
+
+### 🏛️ File & Architecture Modifications
+* **`models.py`**: Created `ProcessedEvent` model with primary key constraint on `event_id`.
+* **`worker.py`**: Integrated `process_event_idempotently()` handler with explicit `IntegrityError` traps and conditional `XACK` dispatching.
