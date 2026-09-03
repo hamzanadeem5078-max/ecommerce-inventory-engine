@@ -6,7 +6,7 @@ from redis.exceptions import ResponseError
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-
+from typing import List, Tuple, Dict, Any
 import config
 import database
 import models
@@ -191,3 +191,104 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
+
+
+logger = logging.getLogger("worker_recovery")
+
+MAX_RETRY_LIMIT = 3
+MIN_IDLE_TIME_MS = 60000  # 60 seconds stale threshold
+
+async def fetch_stale_pending_events(
+    redis_client,
+    stream_key: str,
+    group_name: str,
+    consumer_name: str,
+    count: int = 10
+) -> Tuple[str, List[Tuple[str, Dict[Any, Any]]]]:
+    """
+    Scans the PEL for messages idle longer than MIN_IDLE_TIME_MS,
+    claims ownership, and returns them for processing.
+    """
+    try:
+        # XAUTOCLAIM returns: [next_start_id, [(message_id, {data})], [deleted_ids]]
+        result = await redis_client.xautoclaim(
+            name=stream_key,
+            groupname=group_name,
+            consumername=consumer_name,
+            min_idle_time=MIN_IDLE_TIME_MS,
+            start_id="0-0",
+            count=count
+        )
+        
+        next_start_id = result[0]
+        claimed_messages = result[1]
+        
+        return next_start_id, claimed_messages
+
+    except Exception as e:
+        logger.error(f"Failed to execute XAUTOCLAIM on stream {stream_key}: {str(e)}")
+        return "0-0", []
+
+
+
+
+DLQ_STREAM_KEY = "orders:dlq"
+
+async def process_recovered_events(
+    redis_client,
+    db_session_factory,
+    stream_key: str,
+    group_name: str,
+    consumer_name: str
+):
+    """
+    Scans PEL, re-routes poison messages to DLQ, and safely re-processes 
+    orphaned events through our Day 53 idempotent handler.
+    """
+    next_id, claimed_messages = await fetch_stale_pending_events(
+        redis_client, stream_key, group_name, consumer_name
+    )
+
+    if not claimed_messages:
+        return
+
+    for message_id, payload in claimed_messages:
+        try:
+            # Step 1: Inspect delivery history in PEL
+            pending_info = await redis_client.xpending_range(
+                name=stream_key,
+                groupname=group_name,
+                min=message_id,
+                max=message_id,
+                count=1
+            )
+            
+            delivery_count = pending_info[0]["times_delivered"] if pending_info else 1
+
+            # Step 2: Poison Pill Routing (Exceeded max retries)
+            if delivery_count > MAX_RETRY_LIMIT:
+                logger.warning(f"Message {message_id} exceeded max retries ({delivery_count}). Moving to DLQ.")
+                
+                # Write payload + failure reason to Dead Letter Queue
+                dlq_payload = {**payload, "failure_reason": "MAX_RETRIES_EXCEEDED", "original_id": message_id}
+                await redis_client.xadd(name=DLQ_STREAM_KEY, fields=dlq_payload)
+                
+                # ACK immediately to clear from active PEL
+                await redis_client.xack(stream_key, group_name, message_id)
+                continue
+
+            # Step 3: Safe Re-processing via Day 53 Idempotent DB Handler
+            async with db_session_factory() as db_session:
+                # process_event_idempotently is our Day 53 transaction handler
+                success = await process_event_idempotently(db_session, payload)
+                
+                if success:
+                    # Clear from PEL only on verified DB commit
+                    await redis_client.xack(stream_key, group_name, message_id)
+                    logger.info(f"Successfully recovered and acknowledged pending message {message_id}")
+                else:
+                    logger.error(f"Failed re-processing recovered message {message_id}. Will retry on next pass.")
+
+        except Exception as e:
+            logger.exception(f"Unhandled exception during recovery of message {message_id}: {str(e)}")
