@@ -414,3 +414,6 @@ Implemented a background recovery consumer engine utilizing Redis `XAUTOCLAIM` t
 
 # DAY 55: Tested last 5 days
 made audit_day_55 to test work tests ran smoothly 
+
+## Day 56: Metrics work:
+get stream logic implemented and get health 
