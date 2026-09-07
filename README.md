@@ -431,3 +431,19 @@ Built an isolated, high-throughput benchmark harness (`benchmark_day_57.py`) to 
 
 ### 🔧 Architecture & Code Artifacts:
 * **`benchmark_day_57.py`:** Created the complete load-testing suite containing `generate_event_burst` for pipeline-bounded event generation with exponential retry backoff, `monitor_drain_performance` for non-blocking stream lag evaluation, and `run_benchmark_suite` for orchestration.
+
+
+## Day 58: Lua Script Engine for Atomic Flash Sale Reservations
+
+### 🎯 Objective
+Offloaded flash sale stock validation, user claim deduplication, and inventory decrements to a single-threaded Redis Lua engine to achieve zero-lock, O(1) memory inventory reservations without race conditions under high concurrency.
+
+### 🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified**: Check-Then-Act race conditions between FastAPI worker instances (overselling), cross-slot routing failures under Redis Cluster architectures, dynamic type coercion runtime panics, and application worker failure during Redis script cache purges (`NOSCRIPT` errors).
+* **Boundary Safeguard**: Atomic single-threaded execution inside Redis via `EVALSHA`, strict key/argument boundary segregation (`KEYS[]` vs `ARGV[]`), and transparent exception-driven script re-registration on `NOSCRIPT` failures.
+* **Defensive Invariant**: All inventory state checks, idempotency checks, and stock decrements must occur within the exact same single-threaded Redis Lua execution context. No raw script strings are transmitted across the network on steady-state requests.
+
+### 🔧 Architecture & Code Artifacts
+* **`lua_scripts.py`**: Isolated raw, atomic Lua script string performing missing-key checks, user set existence checks (`SISMEMBER`), stock availability checks, and non-blocking decrements (`DECRBY`).
+* **`lua_engine.py`**: Implemented `LuaScriptEngine` class for SHA1 digest caching, `EVALSHA` execution, and automated dynamic recovery upon `NOSCRIPT` error returns.
+* **`services.py`**: Created `InventoryReservationService` to encapsulate integer status protocol codes into explicit domain enums (`ReservationResult`) and semantically accurate HTTP exception responses (`409 Conflict`, `410 Gone`, `404 Not Found`).
