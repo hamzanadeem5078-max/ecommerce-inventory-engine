@@ -447,3 +447,18 @@ Offloaded flash sale stock validation, user claim deduplication, and inventory d
 * **`lua_scripts.py`**: Isolated raw, atomic Lua script string performing missing-key checks, user set existence checks (`SISMEMBER`), stock availability checks, and non-blocking decrements (`DECRBY`).
 * **`lua_engine.py`**: Implemented `LuaScriptEngine` class for SHA1 digest caching, `EVALSHA` execution, and automated dynamic recovery upon `NOSCRIPT` error returns.
 * **`services.py`**: Created `InventoryReservationService` to encapsulate integer status protocol codes into explicit domain enums (`ReservationResult`) and semantically accurate HTTP exception responses (`409 Conflict`, `410 Gone`, `404 Not Found`).
+
+
+
+### Day 59: Async Event Emitter & Stream Producer Integration
+
+#### 🎯 Objective
+Integrated an asynchronous Redis Stream event producer (`XADD`) into the `InventoryReservationService` to stream reservation events for out-of-band PostgreSQL order creation. Implemented a strict compensating rollback mechanism to revert in-memory Redis inventory mutations if stream event emission fails.
+
+#### 🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified:** Dual-Write Split-Brain / Phantom Reservations (Lua reservation succeeds, but Redis Stream `XADD` fails due to network dropouts or memory errors, leaving stock decremented in Redis while no order event is produced for database sync), Payload Serialization Drift (emitting untyped or missing fields that break downstream consumer deserialization), and Stream Memory Bloat (unbounded stream size causing Redis out-of-memory errors).
+* **Boundary Safeguard:** Compensating Transaction Pattern (invoking `ROLLBACK_STOCK_LUA` in the `except` block upon `XADD` failure), Pydantic Schema Contracts (`OrderCreatedEvent.model_dump()` serialization validation), and Approximate Stream Truncation (`MAXLEN ~ 10000`).
+* **Defensive Invariant:** An in-memory cache mutation must never exist without its corresponding persistent event record. If the event transport boundary fails, the cache state must immediately execute a compensating rollback.
+
+#### 🔧 Architecture & Code Artifacts
+* **`services.py`:** Wrapped Lua execution and `xadd` calls inside an error-handling boundary that catches `RedisError` during stream emission, executes `ROLLBACK_STOCK_LUA` to restore stock and delete user claim state, and serializes event data using the validated `OrderCreatedEvent` schema contract.
