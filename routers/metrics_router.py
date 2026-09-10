@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
-from dependencies import get_redis_db
+from redis_db import get_redis_client
 from metrics import get_stream_metrics, evaluate_system_health
 
 router = APIRouter(prefix="/metrics", tags=["System Metrics & Observability"])
@@ -9,7 +9,7 @@ router = APIRouter(prefix="/metrics", tags=["System Metrics & Observability"])
 async def get_stream_health_telemetry(
     stream_key: str = "orders:stream",
     group_name: str = "order_processing_group",
-    redis_client: Redis = Depends(get_redis_db)
+    redis_client: Redis = Depends(get_redis_client)
 ):
     """
     Non-blocking endpoint probing stream length, consumer lag, and PEL backpressure.

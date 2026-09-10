@@ -477,3 +477,23 @@ Executed a end-to-end integration audit validating atomic flash sale reservation
 #### 🔧 Architecture & Code Artifacts
 * **`worker.py`:** Aligned `ProcessedEvent` instantiation parameters with the exact ORM table schema contract (`event_id`, `event_type`), preventing unhandled exception tracebacks during stream processing and ensuring proper `XACK` stream stream acknowledgment.
 * **`audit_day_60.py`:** Integrated explicit ORM model registration imports prior to `Base.metadata.create_all()`, added end-to-end test execution pipelines, and implemented strict cold-path database persistence assertion checks.
+
+
+
+Day 61: Sliding Window Rate Limiter & Concurrency Throttling
+🎯 Objective
+Implemented an in-memory sliding window rate limiter backed by Redis Sorted Sets (ZSET) to protect high-concurrency order creation endpoints against flash sale traffic spikes and burst requests.
+
+🛡️ Defensive Perspective & Threat Model
+Failure Vectors Identified: Cascading database connection pool exhaustion, resource starvation from automated bot bursts, and race conditions during concurrent limit checks that bypass fixed-window counters.
+
+Boundary Safeguard: Redis ZSET sliding window with atomic execution, trimming historical request timestamps outside the rolling window before evaluating current request density.
+
+Defensive Invariant: No request reaches downstream PostgreSQL transaction locks or inventory allocation unless it passes the atomic sliding window density check.
+
+🔧 Architecture & Code Artifacts
+dependencies.py: Integrated the sliding window rate-limiting middleware dependency to enforce per-client request quotas.
+
+routers/metrics_router.py: Standardized Redis client injection to align dependency retrieval across active monitoring and throttling routes.
+
+routers/orders.py: Protected the order creation pipeline with rate-limiting execution guards to fail fast on excess traffic with HTTP 429.

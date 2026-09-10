@@ -3,6 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import HTTPException, status
 from redis.exceptions import LockError
 import redis_db
+from fastapi import HTTPException, Request, status
+from lua_engine import LuaScriptEngine
+from redis_db import get_redis_client
+
 
 
 def get_product_lock(product_id: int, client=None):
@@ -54,3 +58,31 @@ async def rate_limit_guard(
         yield
     finally:
         pass
+
+
+
+
+async def enforce_rate_limit(request: Request):
+    """
+    FastAPI dependency enforcing sliding window rate limiting per client IP.
+    Returns HTTP 429 when threshold is exceeded.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Obtain async redis client instance
+    redis_client = await get_redis_client()
+    engine = LuaScriptEngine(redis_client)
+
+    # Threshold: Maximum 5 attempts per 10-second rolling window
+    is_allowed = await engine.check_rate_limit(
+        identifier=client_ip,
+        max_limit=5,
+        window_seconds=10
+    )
+
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Flash sale checkout attempts throttled.",
+            headers={"Retry-After": "10"}
+        )

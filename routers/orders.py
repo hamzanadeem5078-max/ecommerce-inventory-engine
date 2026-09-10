@@ -2,7 +2,7 @@ from datetime import datetime
 import logging
 from typing import List, Optional
 import traceback
-
+from dependencies import enforce_rate_limit, redis_lock_guard
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -25,7 +25,12 @@ def send_order_notification(order_id: int, email: str):
         logger.error(f"Background task failed for order id {order_id}: {str(exc)}", exc_info=True)
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.OrderResponse)
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.OrderResponse,
+    dependencies=[Depends(enforce_rate_limit)]  # Rate limiter shield applied at boundary
+)
 async def create_order(
     order: schemas.OrderCreate, 
     background_tasks: BackgroundTasks,
@@ -201,7 +206,11 @@ async def cancel_order(
         )
 
 
-@router.post("/checkout", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/checkout",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_rate_limit)]  # Shield attached here as well
+)
 async def checkout(
     order_data: schemas.OrderCreate,
     background_tasks: BackgroundTasks,
