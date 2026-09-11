@@ -497,3 +497,21 @@ dependencies.py: Integrated the sliding window rate-limiting middleware dependen
 routers/metrics_router.py: Standardized Redis client injection to align dependency retrieval across active monitoring and throttling routes.
 
 routers/orders.py: Protected the order creation pipeline with rate-limiting execution guards to fail fast on excess traffic with HTTP 429.
+
+
+### Day 62: Dynamic IP & User Tier Rate Limiting with Configurable Redis Rules
+
+#### 🎯 Objective
+Extended the rate-limiting layer from static single-tier throttling to a dynamic, multi-tier execution engine capable of evaluating identity (`vip`, `standard`, `anonymous`) and resolving configurable rate rules (`rate_limit:rules`) directly from Redis Hashes at runtime without server restarts.
+
+#### 🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified:** 
+  1. *Redis Rule Read Amplification:* Excessive latency spikes caused by multiple sequential network round-trips per HTTP request ($2 \times \text{RTT}$) to fetch configs and execute scripts.
+  2. *Configuration Fallback Drift:* Missing, deleted, or uninitialized Redis hash keys causing unhandled `KeyError` exceptions or failing open unsafely during traffic spikes.
+  3. *IP Address Spoofing & Header Tampering:* Forged `X-Forwarded-For` request headers causing IP bucket bypass and downstream engine saturation.
+* **Boundary Safeguard:** In-memory fallback dictionary mapping (`DEFAULT_TIER_RULES`) combined with `LuaScriptEngine` sliding window execution inside an atomic boundary dependency (`enforce_dynamic_rate_limit`).
+* **Defensive Invariant:** Dynamic configuration lookups must fail open to hardcoded in-memory defaults on key miss or Redis partition, and rate limit evaluations must short-circuit incoming requests at the outermost route boundary prior to any database transactions or payload processing.
+
+#### 🔧 Architecture & Code Artifacts
+* `dependencies.py`: Integrated `get_actor_tier_and_key`, `fetch_tier_rule`, and `enforce_dynamic_rate_limit` dependencies using `LuaScriptEngine` to dynamically extract identity, read hash rules with fallback guarantees, and block breached rate windows with HTTP 429 status codes.
+* `test_day_62.py`: Created an isolated verification suite asserting anonymous fallback limits, runtime threshold updates via `HSET rate_limit:rules`, and robust default recovery on key deletion.
