@@ -515,3 +515,19 @@ Extended the rate-limiting layer from static single-tier throttling to a dynamic
 #### 🔧 Architecture & Code Artifacts
 * `dependencies.py`: Integrated `get_actor_tier_and_key`, `fetch_tier_rule`, and `enforce_dynamic_rate_limit` dependencies using `LuaScriptEngine` to dynamically extract identity, read hash rules with fallback guarantees, and block breached rate windows with HTTP 429 status codes.
 * `test_day_62.py`: Created an isolated verification suite asserting anonymous fallback limits, runtime threshold updates via `HSET rate_limit:rules`, and robust default recovery on key deletion.
+
+
+
+### Day 63: Circuit Breaker Pattern for Downstream DB & Redis Protection
+
+#### 🎯 Objective
+Built an explicit, thread/async-safe `TargetedCircuitBreaker` state machine (`CLOSED`, `OPEN`, `HALF_OPEN`) with single-probe mutual exclusion to prevent cascading failure, connection starvation, and thundering herd recovery during downstream storage degradation.
+
+#### 🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified:** Thread/connection pool exhaustion under DB degradation, thundering herd on downstream service recovery, and accidental breaker trips caused by unhandled application bugs (`422`/`KeyError`).
+* **Boundary Safeguard:** Protected state transitions using microsecond-scoped `asyncio.Lock` state mutations, executing all downstream network/DB I/O outside the lock. Enforced targeted exception filtering (`ConnectionError`, `TimeoutError`, `OSError`) to keep application logic errors isolated from operational infrastructure status.
+* **Defensive Invariant:** External I/O must never occur inside state-management locks; open circuits must fast-fail fast with `503 Service Unavailable` and structured `Retry-After` headers, and the `HALF_OPEN` state must enforce strictly single-caller probe execution.
+
+#### 🔧 Architecture & Code Artifacts
+* `circuit_breaker.py`: Defined the `CircuitBreaker` base state machine and `TargetedCircuitBreaker` subclass for fast-failing degraded storage calls and executing fallback paths.
+* `test_day_63.py`: Created an isolated verification suite confirming lifecycle state transitions (`CLOSED` $\rightarrow$ `OPEN` $\rightarrow$ `HALF_OPEN` $\rightarrow$ `CLOSED`) and fast-fail behavior under connection errors.
