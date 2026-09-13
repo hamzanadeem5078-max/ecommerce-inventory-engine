@@ -30,3 +30,50 @@ redis.call('SADD', user_claims_key, user_id)
 
 return 1 -- Success: Stock reserved
 """
+
+
+ROLLBACK_STOCK_LUA = """
+local stock_key = KEYS[1]
+local user_claims_key = KEYS[2]
+
+local quantity = tonumber(ARGV[1])
+local user_id = ARGV[2]
+
+-- 1. Restore the stock count
+redis.call('INCRBY', stock_key, quantity)
+
+-- 2. Remove user from claims set
+redis.call('SREM', user_claims_key, user_id)
+
+return 1
+"""
+
+
+SLIDING_WINDOW_RATE_LIMIT_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local max_limit = tonumber(ARGV[3])
+local member = ARGV[4]
+
+local clear_before = now - window
+
+-- 1. Remove timestamps older than rolling sliding window
+redis.call('ZREMRANGEBYSCORE', key, 0, clear_before)
+
+-- 2. Count current active requests in window
+local current_requests = redis.call('ZCARD', key)
+
+-- 3. Check threshold limit
+if current_requests >= max_limit then
+    return 0 -- Rejected (Rate limit reached)
+end
+
+-- 4. Record new request timestamp with unique member
+redis.call('ZADD', key, now, member)
+
+-- 5. Refresh TTL so idle ZSET auto-expires from memory
+redis.call('EXPIRE', key, window)
+
+return 1 -- Allowed
+"""

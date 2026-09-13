@@ -531,3 +531,23 @@ Built an explicit, thread/async-safe `TargetedCircuitBreaker` state machine (`CL
 #### 🔧 Architecture & Code Artifacts
 * `circuit_breaker.py`: Defined the `CircuitBreaker` base state machine and `TargetedCircuitBreaker` subclass for fast-failing degraded storage calls and executing fallback paths.
 * `test_day_63.py`: Created an isolated verification suite confirming lifecycle state transitions (`CLOSED` $\rightarrow$ `OPEN` $\rightarrow$ `HALF_OPEN` $\rightarrow$ `CLOSED`) and fast-fail behavior under connection errors.
+
+
+
+### Day 64: Dynamic Sliding Window Rate Limiting via Redis Lua Scripts
+
+🎯 **Objective**
+Implemented an atomic sliding window rate limiter using Redis Sorted Sets (`ZSET`) and Lua scripts to enforce dynamic, multi-tier traffic limits. This prevents double-throughput boundary spikes and shields downstream infrastructure from flash-sale concurrency bursts.
+
+🛡️ **Defensive Perspective & Threat Model**
+* **Failure Vectors Identified:** 
+  * *Network RTT Race Conditions:* Multi-step read-calculate-write cycles across TCP round trips allowing traffic bursts to bypass fixed-window counters.
+  * *Rate Limit Poisoning:* Denied requests mutating set cardinality and permanently locking out retrying clients.
+  * *Cross-Slot Evaluation Errors:* Key mapping mismatches throwing runtime exceptions in clustered Redis environments.
+* **Boundary Safeguard:** Atomic single-turn Lua script execution using `ZREMRANGEBYSCORE`, `ZCARD`, `ZADD`, and `EXPIRE` combined with bracketed hash tag slot isolation (`{...}`).
+* **Defensive Invariant:** Denied requests must never alter `ZSET` cardinality. Denied attempts are rejected immediately without executing `ZADD`, maintaining strict non-mutation on failure.
+
+🔧 **Architecture & Code Artifacts**
+* **`lua_scripts.py`:** Added `SLIDING_WINDOW_RATE_LIMIT_LUA` script to prune expired timestamps, count active requests within the window, and append unique millisecond-uuid payloads atomically.
+* **`dependencies.py`:** Integrated `enforce_dynamic_rate_limit` dependency to route incoming requests through `LuaScriptEngine` with fallback tier rules (`VIP`, `Standard`, `Anonymous`).
+* **`test_day_64.py`:** Created isolated verification script asserting strict `max_limit` boundary enforcement and zero `ZSET` cardinality inflation on HTTP 429 rejections.
