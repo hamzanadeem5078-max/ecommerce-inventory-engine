@@ -1,16 +1,17 @@
 import time
+import logging
 from contextlib import asynccontextmanager
 from typing import Tuple
-
 from fastapi import Depends, HTTPException, Request, status
 from redis.asyncio import Redis
-from redis.exceptions import LockError
+from redis.exceptions import LockError, ResponseError, RedisError
 
 import redis_db
 from lua_engine import LuaScriptEngine
 from redis_db import get_redis_client
 
-# In-memory defensive contract (Fallback when Redis config is missing or unreachable)
+logger = logging.getLogger(__name__)
+
 DEFAULT_TIER_RULES = {
     "vip": {"limit": 100, "window": 60},
     "standard": {"limit": 20, "window": 60},
@@ -33,7 +34,6 @@ async def redis_lock_guard(product_id: int, client=None):
     lock = get_product_lock(product_id, client=client)
     try:
         async with lock:
-            # Yield control to the caller while holding the lock
             yield lock
     except LockError:
         raise HTTPException(
@@ -51,22 +51,26 @@ async def rate_limit_guard(
     current_time = int(time.time())
     redis_key = f"rate_limit:{key}:{current_time // window}"
 
-    current_requests = await r_client.incr(redis_key)
-
-    # Set expiration on the key when created
-    if current_requests == 1:
-        await r_client.expire(redis_key, window)
-
-    if current_requests > limit:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please slow down your requests.",
-        )
-
     try:
+        current_requests = await r_client.incr(redis_key)
+
+        if current_requests == 1:
+            await r_client.expire(redis_key, window)
+
+        if current_requests > limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please slow down your requests.",
+            )
         yield
-    finally:
-        pass
+    except ResponseError as exc:
+        if "OOM" in str(exc):
+            logger.critical(f"CRITICAL: Redis Out-Of-Memory limit reached in guard: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="System under high memory pressure. Operation throttled.",
+            )
+        raise exc
 
 
 async def get_actor_tier_and_key(request: Request) -> Tuple[str, str]:
@@ -102,8 +106,8 @@ async def fetch_tier_rule(redis: Redis, tier: str) -> Tuple[int, int]:
         window = int(raw_window) if raw_window is not None else fallback["window"]
         return limit, window
 
-    except Exception:
-        # Prevent Redis connection failures from dropping traffic—fail open to defaults
+    except Exception as exc:
+        logger.warning(f"Failed to fetch dynamic tier rules for '{tier}', using fallback: {exc}")
         return fallback["limit"], fallback["window"]
 
 
@@ -114,50 +118,79 @@ async def enforce_rate_limit(request: Request):
     """
     client_ip = request.client.host if request.client else "unknown"
 
-    redis_client = await get_redis_client()
-    engine = LuaScriptEngine(redis_client)
+    try:
+        redis_client = get_redis_client()
+        engine = LuaScriptEngine(redis_client)
 
-    is_allowed = await engine.check_rate_limit(
-        identifier=client_ip, max_limit=5, window_seconds=10
-    )
-
-    if not is_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Flash sale checkout attempts throttled.",
-            headers={"Retry-After": "10"},
+        is_allowed = await engine.check_rate_limit(
+            identifier=client_ip, max_limit=5, window_seconds=10
         )
+
+        if not is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Flash sale checkout attempts throttled.",
+                headers={"Retry-After": "10"},
+            )
+    except ResponseError as exc:
+        if "OOM" in str(exc):
+            logger.critical(f"CRITICAL: Redis Out-Of-Memory during static rate limit check: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Engine memory saturated. Request dropped for downstream protection.",
+            )
+        raise
 
 
 async def enforce_dynamic_rate_limit(request: Request):
     """
     FastAPI dependency guarding routes with dynamic multi-tier rate limits.
     Executes atomic sliding window check via LuaScriptEngine with live Redis rules.
+    Fails closed on Redis OOM/Connection errors to protect PostgreSQL.
     """
     rate_key, tier = await get_actor_tier_and_key(request)
 
-    redis_client = await get_redis_client()
-    max_limit, window_seconds = await fetch_tier_rule(redis_client, tier)
+    try:
+        redis_client = get_redis_client()
+        max_limit, window_seconds = await fetch_tier_rule(redis_client, tier)
 
-    engine = LuaScriptEngine(redis_client)
-    is_allowed = await engine.check_rate_limit(
-        identifier=rate_key,
-        max_limit=max_limit,
-        window_seconds=window_seconds,
-    )
+        engine = LuaScriptEngine(redis_client)
+        is_allowed = await engine.check_rate_limit(
+            identifier=rate_key,
+            max_limit=max_limit,
+            window_seconds=window_seconds,
+        )
 
-    if not is_allowed:
+        if not is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": "Rate limit exceeded",
+                    "tier": tier,
+                    "limit": max_limit,
+                    "window_seconds": window_seconds,
+                },
+                headers={
+                    "Retry-After": str(window_seconds),
+                    "X-RateLimit-Limit": str(max_limit),
+                    "X-RateLimit-Remaining": "0",
+                },
+            )
+    except ResponseError as exc:
+        if "OOM" in str(exc):
+            logger.critical(f"CRITICAL: Redis OOM in enforce_dynamic_rate_limit for key {rate_key}: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Memory boundary exceeded. Rate limit engine temporarily constrained.",
+            )
+        logger.error(f"Redis ResponseError in rate limiter: {exc}")
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "error": "Rate limit exceeded",
-                "tier": tier,
-                "limit": max_limit,
-                "window_seconds": window_seconds,
-            },
-            headers={
-                "Retry-After": str(window_seconds),
-                "X-RateLimit-Limit": str(max_limit),
-                "X-RateLimit-Remaining": "0",
-            },
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Rate limiting engine evaluation error.",
+        )
+    except RedisError as exc:
+        logger.error(f"Redis Connection failure during dynamic rate limit check: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable. Please retry shortly.",
         )

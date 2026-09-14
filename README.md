@@ -551,3 +551,19 @@ Implemented an atomic sliding window rate limiter using Redis Sorted Sets (`ZSET
 * **`lua_scripts.py`:** Added `SLIDING_WINDOW_RATE_LIMIT_LUA` script to prune expired timestamps, count active requests within the window, and append unique millisecond-uuid payloads atomically.
 * **`dependencies.py`:** Integrated `enforce_dynamic_rate_limit` dependency to route incoming requests through `LuaScriptEngine` with fallback tier rules (`VIP`, `Standard`, `Anonymous`).
 * **`test_day_64.py`:** Created isolated verification script asserting strict `max_limit` boundary enforcement and zero `ZSET` cardinality inflation on HTTP 429 rejections.
+
+
+### Day 65: Out-Of-Memory Resilience & Dynamic Rate Limit Infrastructure Guard
+
+#### 🎯 Objective
+Implemented robust Redis memory saturation fault isolation within the dynamic sliding-window rate limiter. Ensured failure-closed mechanics to protect downstream PostgreSQL instances during Redis memory pressure or unexpected connection faults.
+
+#### 🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified:** Redis memory saturation throwing `ResponseError` (OOM), client connection drops throwing `RedisError`, or unhandled async wrapper mismatches leaking uncaught HTTP 500 exceptions and cascading downstream database overload.
+* **Boundary Safeguard:** Strict Redis exception handling hierarchy mapping `ResponseError` ("OOM") and `RedisError` to explicit `HTTPException(503 Service Unavailable)` with zero-leak downstream isolation.
+* **Defensive Invariant:** A rate-limiting cache layer failure must never crash application dependencies or fallback unthrottled onto PostgreSQL; memory boundary violations must fail closed gracefully.
+
+#### 🔧 Architecture & Code Artifacts
+* `dependencies.py`: Corrected synchronous client invocation for `get_redis_client()` and implemented structural `ResponseError` / `RedisError` guardrails to intercept engine saturation before it degrades API availability.
+* `test_day_65.py`: Built unit tests mocking Redis `ResponseError` OOM scenarios to verify HTTP 503 response contracts and payload error messages.
+* `audit_day_65.py`: Implemented milestone infrastructure audit script checking live Redis connection handshakes, eviction policies, and sliding window ZSET TTL key hygiene.
