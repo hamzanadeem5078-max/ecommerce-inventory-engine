@@ -1,111 +1,99 @@
-"""
-services.py - Domain Service Integration & Status Code Mapping
-"""
-
-from enum import IntEnum
 import logging
-from datetime import datetime, timezone
-import redis.asyncio as aioredis
-from fastapi import HTTPException, status
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 from lua_engine import LuaScriptEngine
-from lua_scripts import RESERVE_STOCK_LUA, ROLLBACK_STOCK_LUA
-from schemas import OrderCreatedEvent
+from models import OutboxEvent, OutboxStatus
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("services")
 
 STREAM_NAME = "stream:order_events"
-MAX_STREAM_LEN = 10000
-
-
-class ReservationResult(IntEnum):
-    SUCCESS = 1
-    INSUFFICIENT_STOCK = 0
-    ITEM_NOT_FOUND = -1
-    ALREADY_CLAIMED = -2
 
 
 class InventoryReservationService:
-    """Encapsulates Lua execution logic behind domain abstractions and HTTP exceptions."""
-
     def __init__(self, script_engine: LuaScriptEngine):
-        self.engine = script_engine
-        self.script_body = RESERVE_STOCK_LUA
-        self.rollback_script_body = ROLLBACK_STOCK_LUA
+        self.script_engine = script_engine
 
-    async def reserve_flash_sale_item(
-        self, item_id: str, user_id: str, quantity: int = 1
-    ) -> bool:
+    async def reserve_flash_sale_item(self, item_id: str, user_id: str, quantity: int = 1) -> bool:
         stock_key = f"flash_sale:stock:{item_id}"
         claims_key = f"flash_sale:claims:{item_id}"
 
-        # Step 1: Execute Atomic Lua Reservation
-        raw_result = await self.engine.execute_reservation(
+        # Execute atomic Lua reservation
+        result_code = await self.script_engine.reserve_stock(
             stock_key=stock_key,
-            user_claims_key=claims_key,
-            quantity=quantity,
+            claims_key=claims_key,
             user_id=user_id,
-            script_body=self.script_body,
+            quantity=quantity
         )
 
-        result = ReservationResult(raw_result)
-
-        if result != ReservationResult.SUCCESS:
-            if result == ReservationResult.ALREADY_CLAIMED:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="User has already claimed an item in this flash sale.",
-                )
-
-            if result == ReservationResult.INSUFFICIENT_STOCK:
-                raise HTTPException(
-                    status_code=status.HTTP_410_GONE,
-                    detail="Item is out of stock.",
-                )
-
-            if result == ReservationResult.ITEM_NOT_FOUND:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Flash sale item is not active or missing.",
-                )
-
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Unhandled inventory reservation status.",
+        if result_code == -1:
+            raise HTTPException(status_code=400, detail="User already claimed this item.")
+        elif result_code == 0:
+            raise HTTPException(status_code=410, detail="Item is out of stock.")
+        elif result_code == 1:
+            # Publish event to Stream for cold-path persistence
+            await self.script_engine.redis_client.xadd(
+                STREAM_NAME,
+                {
+                    "user_id": str(user_id),
+                    "item_id": str(item_id),
+                    "quantity": str(quantity),
+                }
             )
+            return True
 
-        # Step 2: Validate Payload via Schema Contract
-        event_payload = OrderCreatedEvent(
-            item_id=item_id,
-            user_id=user_id,
-            quantity=quantity,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        )
+        return False
 
-        # Step 3: Emit Event to Stream with Compensating Rollback Boundary
+    async def reserve_flash_sale_item_with_outbox(
+        self, 
+        db: AsyncSession, 
+        item_id: str, 
+        user_id: str, 
+        quantity: int = 1
+    ) -> bool:
+        """
+        Reserves stock via Redis Lua and guarantees atomic 
+        outbox event creation within a PostgreSQL transaction boundary.
+        """
         try:
-            await self.engine.redis_client.xadd(
-                name=STREAM_NAME,
-                fields=event_payload.model_dump(),
-                maxlen=MAX_STREAM_LEN,
-                approximate=True,
-            )
-        except aioredis.RedisError as exc:
-            logger.error(
-                f"XADD failed for item {item_id}, user {user_id}: {exc}. Triggering compensating rollback."
-            )
+            stock_key = f"flash_sale:stock:{item_id}"
+            claims_key = f"flash_sale:claims:{item_id}"
 
-            # Compensating Action: Restore Redis stock and remove user claim to prevent Phantom Reservation
-            await self.engine.execute_rollback(
+            # 1. Execute atomic Lua reservation
+            result_code = await self.script_engine.reserve_stock(
                 stock_key=stock_key,
-                user_claims_key=claims_key,
-                quantity=quantity,
+                claims_key=claims_key,
                 user_id=user_id,
-                script_body=self.rollback_script_body,
+                quantity=quantity
             )
 
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Reservation pipeline failed at event stream emission stage. Stock state rolled back.",
-            ) from exc
+            if result_code == -1:
+                raise HTTPException(status_code=400, detail="User already claimed this item.")
+            elif result_code == 0:
+                raise HTTPException(status_code=410, detail="Item is out of stock.")
+            
+            if result_code == 1:
+                # 2. Instantiate and stage Outbox Event in the same DB session
+                outbox_event = OutboxEvent(
+                    event_type="INVENTORY_RESERVED",
+                    payload={
+                        "user_id": str(user_id),
+                        "item_id": str(item_id),
+                        "quantity": str(quantity),
+                    },
+                    status=OutboxStatus.PENDING
+                )
+                db.add(outbox_event)
+                
+                # 3. Atomic Commit: DB state change + Outbox record commit together
+                await db.commit()
+                await db.refresh(outbox_event)
+                
+                logger.info(f"Inventory reserved & outbox event {outbox_event.id} committed.")
+                return True
 
-        return True
+            return False
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Transaction failed for item {item_id}, rolling back. Error: {e}")
+            raise

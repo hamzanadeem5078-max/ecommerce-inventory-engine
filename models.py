@@ -1,7 +1,9 @@
 import enum
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, func, Enum
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, func, Enum, Index
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+import uuid
 
 import database  # Explicit module import to maintain standard namespace access
 
@@ -68,3 +70,33 @@ class ProcessedEvent(database.Base):
     event_id = Column(String, primary_key=True, index=True)
     event_type = Column(String, nullable=False)
     processed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class OutboxStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    PROCESSED = "PROCESSED"
+    FAILED = "FAILED"
+
+
+class OutboxEvent(database.Base):
+    __tablename__ = "outbox_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type = Column(String(100), nullable=False, index=True)
+    payload = Column(JSONB, nullable=False)
+    status = Column(
+        Enum(OutboxStatus, name="outbox_status_enum"), 
+        nullable=False, 
+        default=OutboxStatus.PENDING
+    )
+    retry_count = Column(String, default=lambda: "0", nullable=False)
+    created_at = Column(
+        DateTime(timezone=True), 
+        nullable=False, 
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        Index("idx_outbox_status_created", "status", "created_at"),
+    )

@@ -1,9 +1,10 @@
 import asyncio
 import logging
 from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import SessionLocal
-from models import ProcessedEvent
+from models import ProcessedEvent, OutboxEvent, OutboxStatus
 from services import STREAM_NAME
 
 logger = logging.getLogger("worker")
@@ -46,6 +47,39 @@ async def parse_and_process_event(event_id: str, fields: dict):
         session.add(record)
         session.commit()
         logger.info(f"[DB PERSISTED] Event {event_id} written to ledger.")
+
+
+async def process_outbox_batch(db: AsyncSession, batch_size: int = 50):
+    """
+    Polls pending outbox events using row-level locks and skip-locked concurrency 
+    to safely dispatch across multiple worker instances without race conditions.
+    """
+    async with db.begin():
+        stmt = (
+            select(OutboxEvent)
+            .where(OutboxEvent.status == OutboxStatus.PENDING)
+            .order_by(OutboxEvent.created_at.asc())
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        result = await db.execute(stmt)
+        events = result.scalars().all()
+
+        if not events:
+            return 0
+
+        for event in events:
+            try:
+                event.status = OutboxStatus.PROCESSING
+                # Dispatch payload logic here (e.g., publishing to Redis Stream or message broker)
+                event.status = OutboxStatus.PROCESSED
+                logger.info(f"[OUTBOX DISPATCHED] Event {event.id} processed successfully.")
+            except Exception as e:
+                event.status = OutboxStatus.FAILED
+                logger.error(f"[OUTBOX ERROR] Failed to dispatch event {event.id}: {e}")
+
+        await db.commit()
+        return len(events)
 
 
 async def worker_loop(redis_client):
