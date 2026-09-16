@@ -6,11 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import SessionLocal
 from models import ProcessedEvent, OutboxEvent, OutboxStatus
 from services import STREAM_NAME
+from circuit_breaker import CircuitBreaker, CircuitState
+import redis.asyncio as aioredis  # Async Redis client for pipeline execution
 
 logger = logging.getLogger("worker")
 
 GROUP_NAME = "inventory_workers"
 CONSUMER_NAME = "worker_1"
+
+# Instantiate circuit breaker protecting Redis Stream producers
+redis_circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
 
 
 async def setup_consumer_group(redis_client):
@@ -49,37 +54,59 @@ async def parse_and_process_event(event_id: str, fields: dict):
         logger.info(f"[DB PERSISTED] Event {event_id} written to ledger.")
 
 
-async def process_outbox_batch(db: AsyncSession, batch_size: int = 50):
+async def process_outbox_batch(db: AsyncSession, redis_client: aioredis.Redis, batch_size: int = 50):
     """
-    Polls pending outbox events using row-level locks and skip-locked concurrency 
-    to safely dispatch across multiple worker instances without race conditions.
+    Polls pending outbox events using row-level locks (FOR UPDATE SKIP LOCKED) 
+    and dispatches them efficiently via Redis pipelines, protected by a circuit breaker.
     """
-    async with db.begin():
-        stmt = (
-            select(OutboxEvent)
-            .where(OutboxEvent.status == OutboxStatus.PENDING)
-            .order_by(OutboxEvent.created_at.asc())
-            .limit(batch_size)
-            .with_for_update(skip_locked=True)
-        )
-        result = await db.execute(stmt)
-        events = result.scalars().all()
+    # 1. Fail fast if circuit breaker is OPEN
+    if redis_circuit_breaker.state == CircuitState.OPEN:
+        logger.warning("[CIRCUIT BREAKER OPEN] Redis batch dispatch aborted. Preserving system resources.")
+        return 0
 
-        if not events:
-            return 0
+    try:
+        async with db.begin():
+            stmt = (
+                select(OutboxEvent)
+                .where(OutboxEvent.status == OutboxStatus.PENDING)
+                .order_by(OutboxEvent.created_at.asc())
+                .limit(batch_size)
+                .with_for_update(skip_locked=True)
+            )
+            result = await db.execute(stmt)
+            events = result.scalars().all()
 
-        for event in events:
-            try:
+            if not events:
+                return 0
+
+            # 2. Open an async Redis pipeline for batch packet transmission
+            pipe = redis_client.pipeline()
+            for event in events:
                 event.status = OutboxStatus.PROCESSING
-                # Dispatch payload logic here (e.g., publishing to Redis Stream or message broker)
-                event.status = OutboxStatus.PROCESSED
-                logger.info(f"[OUTBOX DISPATCHED] Event {event.id} processed successfully.")
-            except Exception as e:
-                event.status = OutboxStatus.FAILED
-                logger.error(f"[OUTBOX ERROR] Failed to dispatch event {event.id}: {e}")
+                payload_data = {
+                    "event_id": str(event.id),
+                    "event_type": str(event.event_type),
+                    "payload": str(event.payload)
+                }
+                pipe.xadd(STREAM_NAME, payload_data)
 
-        await db.commit()
+            # Execute pipeline network socket transaction atomically
+            await pipe.execute()
+
+            # 3. Mark events as processed/dispatched in PostgreSQL
+            for event in events:
+                event.status = OutboxStatus.PROCESSED
+                logger.info(f"[OUTBOX DISPATCHED] Event {event.id} dispatched via pipeline successfully.")
+
+        # Notify circuit breaker of successful execution
+        await redis_circuit_breaker._on_success()
         return len(events)
+
+    except Exception as e:
+        # Notify circuit breaker of failure
+        await redis_circuit_breaker._on_failure()
+        logger.error(f"[OUTBOX ERROR] Batch dispatch pipeline failed: {e}")
+        raise
 
 
 async def worker_loop(redis_client):
