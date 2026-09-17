@@ -1,7 +1,9 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import update, cast, String, Integer, case
 
 from database import SessionLocal
 from models import ProcessedEvent, OutboxEvent, OutboxStatus
@@ -32,11 +34,9 @@ async def setup_consumer_group(redis_client):
 
 
 async def parse_and_process_event(event_id: str, fields: dict):
-    # Extract event_type from Redis Stream payload (default to ORDER_CREATED if absent)
     event_type = fields.get("event_type", "ORDER_CREATED")
 
     with SessionLocal() as session:
-        # Idempotency Check
         stmt = select(ProcessedEvent).where(ProcessedEvent.event_id == event_id)
         existing = session.execute(stmt).scalar_one_or_none()
 
@@ -44,7 +44,6 @@ async def parse_and_process_event(event_id: str, fields: dict):
             logger.info(f"[IDEMPOTENT] Event {event_id} already processed. Skipping.")
             return
 
-        # Persist event record matching exact ProcessedEvent schema (event_id, event_type)
         record = ProcessedEvent(
             event_id=event_id,
             event_type=event_type
@@ -55,15 +54,11 @@ async def parse_and_process_event(event_id: str, fields: dict):
 
 
 async def process_outbox_batch(db: AsyncSession, redis_client: aioredis.Redis, batch_size: int = 50):
-    """
-    Polls pending outbox events using row-level locks (FOR UPDATE SKIP LOCKED) 
-    and dispatches them efficiently via Redis pipelines, protected by a circuit breaker.
-    """
-    # 1. Fail fast if circuit breaker is OPEN
     if redis_circuit_breaker.state == CircuitState.OPEN:
         logger.warning("[CIRCUIT BREAKER OPEN] Redis batch dispatch aborted. Preserving system resources.")
         return 0
 
+    events = []
     try:
         async with db.begin():
             stmt = (
@@ -79,7 +74,6 @@ async def process_outbox_batch(db: AsyncSession, redis_client: aioredis.Redis, b
             if not events:
                 return 0
 
-            # 2. Open an async Redis pipeline for batch packet transmission
             pipe = redis_client.pipeline()
             for event in events:
                 event.status = OutboxStatus.PROCESSING
@@ -90,22 +84,38 @@ async def process_outbox_batch(db: AsyncSession, redis_client: aioredis.Redis, b
                 }
                 pipe.xadd(STREAM_NAME, payload_data)
 
-            # Execute pipeline network socket transaction atomically
             await pipe.execute()
 
-            # 3. Mark events as processed/dispatched in PostgreSQL
             for event in events:
                 event.status = OutboxStatus.PROCESSED
                 logger.info(f"[OUTBOX DISPATCHED] Event {event.id} dispatched via pipeline successfully.")
 
-        # Notify circuit breaker of successful execution
         await redis_circuit_breaker._on_success()
         return len(events)
 
     except Exception as e:
-        # Notify circuit breaker of failure
         await redis_circuit_breaker._on_failure()
-        logger.error(f"[OUTBOX ERROR] Batch dispatch pipeline failed: {e}")
+        logger.error(f"[OUTBOX ERROR] Batch dispatch failed, executing DLQ boundary guard: {e}")
+        
+        event_ids = [evt.id for evt in events]
+        if event_ids:
+            async with db.begin():
+                curr_retry = cast(OutboxEvent.retry_count, Integer)
+                next_retry = curr_retry + 1
+                recovery_stmt = (
+                    update(OutboxEvent)
+                    .where(OutboxEvent.id.in_(event_ids))
+                    .values(
+                        retry_count=cast(next_retry, String),
+                        last_error=str(e),
+                        failed_at=datetime.now(timezone.utc),
+                        status=case(
+                            (next_retry >= 3, OutboxStatus.DEAD),
+                            else_=OutboxStatus.PENDING
+                        )
+                    )
+                )
+                await db.execute(recovery_stmt)
         raise
 
 

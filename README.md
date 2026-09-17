@@ -608,3 +608,21 @@ Defensive Invariant: If downstream infrastructure breaches its failure threshold
 worker.py: Integrated CircuitBreaker state guarding (CircuitState.OPEN) into process_outbox_batch for fast-failing, and optimized outbox packet transmission using asynchronous Redis pipelines (pipe.xadd and pipe.execute()).
 
 test_day_67.py: Implemented isolated asynchronous test coverage to verify that an open circuit breaker halts batch processing instantly without touching database or Redis network handles.
+
+
+
+## Day 68: Dead Letter Queue (DLQ) & Manual Replay Endpoints
+
+🎯 Objective
+Implement terminal isolation for poison-pill outbox events crossing retry thresholds ($\ge 3$ failures) with forensic error capture, and provide a gated admin replay endpoint for manual re-intake.
+
+🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified**: Endless retry sinkholes (infinite loop polling poison payloads), diagnostic amnesia (losing trace context on state transition), unbounded replay amplification (bulk-dumping failed events back into streaming pipelines, re-tripping circuit breakers).
+* **Boundary Safeguard**: Post-rollback isolated transactional counter mutation with explicit SQL type casting (`cast`, `case`), gated terminal-state target selection (`status == 'DEAD'`).
+* **Defensive Invariant**: Failure accounting must occur in a dedicated transaction boundary post-rollback to prevent phantom wipeouts; replay is strictly restricted to terminal quarantine states with complete counter zeroing.
+
+🔧 Architecture & Code Artifacts
+* `models.py`: Appended `DEAD` variant to `OutboxStatus` enum; added nullable `last_error` (Text) and `failed_at` (DateTime) telemetry columns to `OutboxEvent`.
+* `worker.py`: Injected post-rollback recovery SQL using SQLAlchemy `cast` and `case` inside `process_outbox_batch` exception boundary to increment string-typed retry counters and transition to `DEAD` at threshold $\ge 3$.
+* `routers/dlq.py`: Created administrative replay endpoint (`POST /dlq/events/{event_id}/replay`) requiring UUID matching and `DEAD` status prerequisite before atomic reset to `PENDING` with zeroed counters.
+* `main.py`: Registered `dlq.router` to expose the quarantine management boundary.

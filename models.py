@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, func, Enum, Index
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, func, Enum, Index, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
@@ -77,6 +77,7 @@ class OutboxStatus(str, enum.Enum):
     PROCESSING = "PROCESSING"
     PROCESSED = "PROCESSED"
     FAILED = "FAILED"
+    DEAD = "DEAD"
 
 
 class OutboxEvent(database.Base):
@@ -91,6 +92,8 @@ class OutboxEvent(database.Base):
         default=OutboxStatus.PENDING
     )
     retry_count = Column(String, default=lambda: "0", nullable=False)
+    last_error = Column(Text, nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(
         DateTime(timezone=True), 
         nullable=False, 

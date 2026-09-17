@@ -1,0 +1,40 @@
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import update
+from models import OutboxEvent, OutboxStatus
+from database import SessionLocal
+import logging
+
+router = APIRouter(prefix="/dlq", tags=["Dead Letter Queue"])
+logger = logging.getLogger("uvicorn.error")
+
+async def get_db_session():
+    async with SessionLocal() as session:
+        yield session
+
+@router.post("/events/{event_id}/replay", status_code=status.HTTP_200_OK)
+async def replay_dead_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_db_session)):
+    async with db.begin():
+        stmt = (
+            update(OutboxEvent)
+            .where(OutboxEvent.id == event_id, OutboxEvent.status == OutboxStatus.DEAD)
+            .values(
+                status=OutboxStatus.PENDING,
+                retry_count="0",
+                last_error=None,
+                failed_at=None
+            )
+            .returning(OutboxEvent.id)
+        )
+        result = await db.execute(stmt)
+        updated_id = result.scalar_one_or_none()
+        
+        if not updated_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Dead event {event_id} not found or not in 'DEAD' state."
+            )
+            
+    logger.info(f"[DLQ REPLAY] Event {updated_id} reset to PENDING state (retry_count reset to '0').")
+    return {"status": "replayed", "event_id": str(updated_id)}
