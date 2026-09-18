@@ -626,3 +626,18 @@ Implement terminal isolation for poison-pill outbox events crossing retry thresh
 * `worker.py`: Injected post-rollback recovery SQL using SQLAlchemy `cast` and `case` inside `process_outbox_batch` exception boundary to increment string-typed retry counters and transition to `DEAD` at threshold $\ge 3$.
 * `routers/dlq.py`: Created administrative replay endpoint (`POST /dlq/events/{event_id}/replay`) requiring UUID matching and `DEAD` status prerequisite before atomic reset to `PENDING` with zeroed counters.
 * `main.py`: Registered `dlq.router` to expose the quarantine management boundary.
+
+
+Day 69: Resilient Circuit Breaker Integration & Outbox Fallback
+
+🎯 Objective
+Upgraded the event production pipeline with targeted circuit breaker protection to seamlessly fall back to PostgreSQL outbox persistence during Redis network outages. Configured dynamic `X-System-Degraded: true` HTTP response headers to alert upstream clients when asynchronous processing enters a degraded state.
+
+🛡️ Defensive Perspective & Threat Model
+Failure Vectors Identified: Cascading thread starvation during Redis network timeouts, silent event drops on stream publishing failure, and unhandled circuit open exceptions crashing business logic routes.
+Boundary Safeguard: Wrapped Redis Stream `xadd` calls inside a `TargetedCircuitBreaker` linked directly to an outbox DB fallback function executing inside the active transactional `Session`.
+Defensive Invariant: An order transaction must never fail due to downstream event bus unavailability; events must persist atomically to either the Redis Stream or the `outbox_events` table within the same DB transaction boundary.
+
+🔧 Architecture & Code Artifacts
+event_producer.py: Created `ResilientEventProducer` to execute stream writes via `TargetedCircuitBreaker` and divert failed operations to `models.OutboxEvent` (`status = PENDING`).
+routers/orders.py: Integrated `ResilientEventProducer` into `create_order` and `cancel_order` routes, attaching the database session to event publishing and appending `X-System-Degraded: true` headers when running in degraded mode.
