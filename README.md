@@ -641,3 +641,17 @@ Defensive Invariant: An order transaction must never fail due to downstream even
 🔧 Architecture & Code Artifacts
 event_producer.py: Created `ResilientEventProducer` to execute stream writes via `TargetedCircuitBreaker` and divert failed operations to `models.OutboxEvent` (`status = PENDING`).
 routers/orders.py: Integrated `ResilientEventProducer` into `create_order` and `cancel_order` routes, attaching the database session to event publishing and appending `X-System-Degraded: true` headers when running in degraded mode.
+
+
+# Day 70: Resiliency Audit & Circuit Breaker Verification Suite
+
+🎯 Objective
+Implemented and executed audit_day_70.py to programmatically validate Redis Stream partition fault injection, TargetedCircuitBreaker state transitions (CLOSED $\rightarrow$ OPEN $\rightarrow$ HALF-OPEN $\rightarrow$ CLOSED), and PostgreSQL transactional outbox fallback persistence under non-autocommit session boundaries.
+
+🛡️ Defensive Perspective & Threat Model
+Failure Vectors Identified: Test state pollution, uncommitted session identity map reads under autocommit=False, and Redis offline setup socket exceptions.
+Boundary Safeguard: Safe try/except Redis keyspace flushing, explicit transaction commit alignment (db.commit()), and mock-driven fault injection hooks (AsyncMock).
+Defensive Invariant: Fallback outbox entries must bind to atomic transaction boundaries; test harnesses must enforce clean-state isolation and explicit session persistence lifecycle awareness.
+
+🔧 Architecture & Code Artifacts
+audit_day_70.py: Added end-to-end resilient audit suite featuring offline-safe Redis flush guards, _raw_redis_publish failure mocking, explicit db.commit() post-fallback assertion capture, and state-machine transition assertions.
