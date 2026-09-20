@@ -77,3 +77,19 @@ redis.call('EXPIRE', key, window)
 
 return 1 -- Allowed
 """
+
+
+RETRY_COUNT_LUA = """
+local key = KEYS[1]
+local max_retries = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+
+local count = redis.call('INCR', key)
+if count == 1 then
+    redis.call('EXPIRE', key, ttl)
+end
+if count > max_retries then
+    return 0 -- Threshold breached -> DLQ route
+end
+return count
+"""

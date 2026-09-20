@@ -655,3 +655,18 @@ Defensive Invariant: Fallback outbox entries must bind to atomic transaction bou
 
 🔧 Architecture & Code Artifacts
 audit_day_70.py: Added end-to-end resilient audit suite featuring offline-safe Redis flush guards, _raw_redis_publish failure mocking, explicit db.commit() post-fallback assertion capture, and state-machine transition assertions.
+
+## Day 71: Consumer Group Dead-Letter Queue / Poison-Pill Isolation
+
+🎯 Objective
+Implemented an atomic retry-threshold ($N=3$) quarantine system for Redis Stream consumer groups, routing toxic payloads to a dedicated DLQ stream (dlq:stream) while ensuring zero ghost drops or memory bloat.
+
+🛡️ Defensive Perspective & Threat ModelFailure Vectors Identified: Poison-pill consumer loop starvation, orphaned quarantine state (ghost drops from premature XACK), unbounded memory accumulation from abandoned retry counters.Boundary Safeguard: Atomic Redis Lua evaluation (INCR + EXPIRE), strict multi-stage transition ordering (XADD dlq:stream $\rightarrow$ XACK main_stream $\rightarrow$ DEL retry_counter).Defensive Invariant: State transfer ownership must be duplicated to safety dock (dlq:stream) before releasing primary stream claim (XACK); tracking keys carry mandatory 24-hour TTL bounds.
+
+🔧 Architecture & Code Artifacts
+
+lua_scripts.py: Added RETRY_COUNT_LUA for atomic counter increment, TTL initialization on first touch, and threshold breach signal (0).
+
+worker.py: Updated worker_loop exception handler to evaluate retry count via Lua, route poison pills to dlq:stream, execute XACK, and purge retry tracking keys.
+
+

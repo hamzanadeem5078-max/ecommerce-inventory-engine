@@ -10,6 +10,7 @@ from models import ProcessedEvent, OutboxEvent, OutboxStatus
 from services import STREAM_NAME
 from circuit_breaker import CircuitBreaker, CircuitState
 import redis.asyncio as aioredis  # Async Redis client for pipeline execution
+from lua_scripts import RETRY_COUNT_LUA
 
 logger = logging.getLogger("worker")
 
@@ -136,12 +137,32 @@ async def worker_loop(redis_client):
 
             for stream, messages in entries:
                 for message_id, fields in messages:
-                    await parse_and_process_event(message_id, fields)
-                    await redis_client.xack(STREAM_NAME, GROUP_NAME, message_id)
+                    try:
+                        await parse_and_process_event(message_id, fields)
+                        await redis_client.xack(STREAM_NAME, GROUP_NAME, message_id)
+                    except Exception as process_err:
+                        logger.error(f"[WORKER FAIL] Processing error on {message_id}: {process_err}")
+                        retry_key = f"retry:count:{message_id}"
+                        res = await redis_client.eval(RETRY_COUNT_LUA, 1, retry_key, 3, 86400)
+                        
+                        if res == 0:
+                            logger.warning(f"[DLQ QUARANTINE] Message {message_id} exceeded max retries. Routing to dlq:stream.")
+                            dlq_payload = {
+                                "original_id": message_id,
+                                "fields": str(fields),
+                                "last_error": str(process_err),
+                                "quarantined_at": datetime.now(timezone.utc).isoformat()
+                            }
+                            await redis_client.xadd("dlq:stream", dlq_payload)
+                            await redis_client.xack(STREAM_NAME, GROUP_NAME, message_id)
+                            await redis_client.delete(retry_key)
+                        else:
+                            logger.info(f"[RETRY QUEUED] Message {message_id} retry count: {res}/3.")
+                        await asyncio.sleep(0.1)
 
         except asyncio.CancelledError:
             logger.info("Worker task received cancellation signal. Exiting.")
             break
         except Exception as e:
-            logger.error(f"Error in worker loop: {e}")
+            logger.error(f"Error in outer worker loop: {e}")
             await asyncio.sleep(1)
