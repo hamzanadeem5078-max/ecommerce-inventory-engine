@@ -147,3 +147,39 @@ class EventEnvelopeSchema(BaseModel):
             "timestamp": self.timestamp.isoformat(),
             "payload": json.dumps(self.payload)
         }
+
+
+class OrderCreatedEvent(BaseModel):
+    item_id: str
+    user_id: str
+    quantity: int = 1
+    timestamp: Optional[str] = None
+
+
+
+class DLQMessageSchema(BaseModel):
+    message_id: str
+    fields: Dict[str, str]
+    retry_count: int = 0
+    failure_reason: Optional[str] = None
+
+    @classmethod
+    def from_redis_tuple(cls, msg_id: str, fields: Dict[str, str]) -> "DLQMessageSchema":
+        raw_retry = fields.get("retry_count", "0")
+        try:
+            retry_cnt = int(raw_retry)
+        except ValueError:
+            retry_cnt = 0
+        return cls(
+            message_id=msg_id,
+            fields=fields,
+            retry_count=retry_cnt,
+            failure_reason=fields.get("failure_reason") or fields.get("error")
+        )
+
+
+class DLQInspectResponse(BaseModel):
+    stream_key: str
+    limit: int
+    count: int
+    messages: list[DLQMessageSchema]

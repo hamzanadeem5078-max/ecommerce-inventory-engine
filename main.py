@@ -4,7 +4,7 @@ from database import Base, engine
 import dependencies
 import models
 import redis_db
-from routers import categories, health, inventory, orders, products,metrics_router
+from routers import categories, health, inventory, orders, products, metrics_router, dlq
 
 # Fires the machinery to look at models and build them in Postgres
 Base.metadata.create_all(bind=engine)
@@ -41,6 +41,7 @@ app.include_router(inventory.router)
 app.include_router(health.router)
 app.include_router(orders.router)
 app.include_router(metrics_router.router)
+app.include_router(dlq.router)
 
 @app.get("/")
 async def root():

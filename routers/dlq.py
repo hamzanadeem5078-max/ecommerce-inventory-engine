@@ -1,10 +1,10 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import update
+from sqlalchemy import update, select
 from models import OutboxEvent, OutboxStatus
 from database import SessionLocal
-import logging
 
 router = APIRouter(prefix="/dlq", tags=["Dead Letter Queue"])
 logger = logging.getLogger("uvicorn.error")
@@ -13,8 +13,37 @@ async def get_db_session():
     async with SessionLocal() as session:
         yield session
 
+@router.get("/events", status_code=status.HTTP_200_OK)
+async def inspect_dead_outbox_events(
+    limit: int = Query(default=50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """Bounded inspection of dead/quarantined outbox events."""
+    stmt = (
+        select(OutboxEvent)
+        .where(OutboxEvent.status == OutboxStatus.DEAD)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    events = result.scalars().all()
+    return {
+        "count": len(events),
+        "limit": limit,
+        "events": [
+            {
+                "id": str(e.id),
+                "event_type": e.event_type,
+                "payload": e.payload,
+                "retry_count": str(e.retry_count),
+                "last_error": e.last_error
+            }
+            for e in events
+        ]
+    }
+
 @router.post("/events/{event_id}/replay", status_code=status.HTTP_200_OK)
 async def replay_dead_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_db_session)):
+    """Safe atomic state transition from DEAD back to PENDING for reprocessing."""
     async with db.begin():
         stmt = (
             update(OutboxEvent)

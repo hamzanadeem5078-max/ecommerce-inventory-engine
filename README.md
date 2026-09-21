@@ -670,3 +670,17 @@ lua_scripts.py: Added RETRY_COUNT_LUA for atomic counter increment, TTL initiali
 worker.py: Updated worker_loop exception handler to evaluate retry count via Lua, route poison pills to dlq:stream, execute XACK, and purge retry tracking keys.
 
 
+## Day 72: DLQ Inspection & Safe Administrative Replay
+
+🎯 Objective
+Implement bounded operator inspection and atomic state-guarded replay for quarantined dead-letter outbox events without race conditions or memory bloat.
+
+🛡️ Defensive Perspective & Threat Model
+Failure Vectors Identified: Unbounded table memory scan under load, duplicate state mutation/parallel replay races, and immediate re-quarantine loops caused by retained error payloads.
+Boundary Safeguard: Parameter-clamped pagination (Query(default=50, ge=1, le=100)), row-scoped atomic transaction block matching primary ID and strict quarantine status, and error state nullification.
+Defensive Invariant: State transition replay must execute inside an exclusive transaction matching id AND status == DEAD, returning zero modified rows on duplicate collision.
+
+🔧 Architecture & Code Artifacts
+[routers/dlq.py]: Added bounded GET /dlq/events query handler and atomic POST /dlq/events/{event_id}/replay transaction wrapper resetting status to PENDING and clearing error logs.
+[main.py]: Mounted DLQ router module into application dependency and route registry via app.include_router(dlq.router).
+[README.md]: Updated master project documentation with Day 72 DLQ lifecycle invariants.
