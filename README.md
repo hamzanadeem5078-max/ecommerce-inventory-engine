@@ -684,3 +684,28 @@ Defensive Invariant: State transition replay must execute inside an exclusive tr
 [routers/dlq.py]: Added bounded GET /dlq/events query handler and atomic POST /dlq/events/{event_id}/replay transaction wrapper resetting status to PENDING and clearing error logs.
 [main.py]: Mounted DLQ router module into application dependency and route registry via app.include_router(dlq.router).
 [README.md]: Updated master project documentation with Day 72 DLQ lifecycle invariants.
+
+
+## Day 73: Observability, Telemetry & Operational Metrics:
+
+🎯 Objective
+Instrumented process-global Prometheus metrics (Gauge and Counter) to track Dead Letter Queue depth, message replay counts, and async outbox delivery lag without introducing hot-path database or Redis query overhead.
+
+
+🛡️ Defensive Perspective & Threat Model
+
+Failure Vectors Identified: Hot-path DB/Redis pool saturation via heavy unindexed COUNT(*) or key scans during metrics scraping, cardinality explosion from tagging metrics with dynamic entity UUIDs/error strings, and clock-skew distortion of delivery latency.
+
+Boundary Safeguard: RAM-resident prometheus_client exposition endpoint (/metrics/prometheus), strict static-enum label allowlists (queue_name, status, channel), and UTC-anchored delta calculations.
+
+Defensive Invariant: Metrics exposition never executes blocking remote database reads; high-cardinality entity identifiers are permanently barred from metric label tuples.
+
+🔧 Architecture & Code Artifacts
+
+metrics.py: Defined bounded Gauge (dlq_depth_total, outbox_lag_seconds) and Counter (dlq_replay_total).
+
+routers/metrics_router.py: Exposed unweighted RAM-resident time-series exposition via GET /metrics/prometheus.
+
+worker.py: Hooked atomic .inc() on DLQ quarantine and .set() on outbox delivery latency delta calculation.
+
+routers/dlq.py: Incremented replay counter on atomic state transition from DEAD back to PENDING.

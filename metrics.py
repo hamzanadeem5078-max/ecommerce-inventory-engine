@@ -98,3 +98,26 @@ def evaluate_system_health(metrics: Dict[str, Any]) -> Dict[str, Any]:
     metrics["health_classification"] = health_status
     metrics["alerts"] = alerts
     return metrics
+
+
+
+from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST
+
+# Bounded cardinality time-series definitions
+dlq_depth_gauge = Gauge(
+    "dlq_depth_total",
+    "Number of items currently parked in Dead Letter Queues",
+    ["queue_name"]
+)
+
+replay_counter = Counter(
+    "dlq_replay_total",
+    "Cumulative count of DLQ messages re-enqueued to active processing",
+    ["queue_name", "status"]
+)
+
+outbox_lag_seconds_gauge = Gauge(
+    "outbox_lag_seconds",
+    "Delta in seconds between outbox event creation and consumer pickup",
+    ["channel"]
+)

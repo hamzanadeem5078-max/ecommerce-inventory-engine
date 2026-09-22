@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update, select
 from models import OutboxEvent, OutboxStatus
 from database import SessionLocal
+from metrics import replay_counter
 
 router = APIRouter(prefix="/dlq", tags=["Dead Letter Queue"])
 logger = logging.getLogger("uvicorn.error")
@@ -65,5 +66,6 @@ async def replay_dead_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_
                 detail=f"Dead event {event_id} not found or not in 'DEAD' state."
             )
             
+    replay_counter.labels(queue_name="outbox_db_dlq", status="replayed").inc()
     logger.info(f"[DLQ REPLAY] Event {updated_id} reset to PENDING state (retry_count reset to '0').")
     return {"status": "replayed", "event_id": str(updated_id)}

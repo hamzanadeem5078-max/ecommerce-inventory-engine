@@ -11,6 +11,7 @@ from services import STREAM_NAME
 from circuit_breaker import CircuitBreaker, CircuitState
 import redis.asyncio as aioredis  # Async Redis client for pipeline execution
 from lua_scripts import RETRY_COUNT_LUA
+from metrics import dlq_depth_gauge, outbox_lag_seconds_gauge
 
 logger = logging.getLogger("worker")
 
@@ -89,6 +90,8 @@ async def process_outbox_batch(db: AsyncSession, redis_client: aioredis.Redis, b
 
             for event in events:
                 event.status = OutboxStatus.PROCESSED
+                lag_delta = (datetime.now(timezone.utc) - event.created_at).total_seconds()
+                outbox_lag_seconds_gauge.labels(channel=STREAM_NAME).set(lag_delta)
                 logger.info(f"[OUTBOX DISPATCHED] Event {event.id} dispatched via pipeline successfully.")
 
         await redis_circuit_breaker._on_success()
@@ -147,6 +150,7 @@ async def worker_loop(redis_client):
                         
                         if res == 0:
                             logger.warning(f"[DLQ QUARANTINE] Message {message_id} exceeded max retries. Routing to dlq:stream.")
+                            dlq_depth_gauge.labels(queue_name="dlq:stream").inc()
                             dlq_payload = {
                                 "original_id": message_id,
                                 "fields": str(fields),

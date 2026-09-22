@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from redis_db import get_redis_client
 from metrics import get_stream_metrics, evaluate_system_health
-
+from fastapi import Response
+from metrics import generate_latest, CONTENT_TYPE_LATEST
 router = APIRouter(prefix="/metrics", tags=["System Metrics & Observability"])
 
 @router.get("/stream", status_code=status.HTTP_200_OK)
@@ -34,3 +35,12 @@ async def get_stream_health_telemetry(
         }
 
     return evaluated_telemetry
+
+
+
+
+
+@router.get("/prometheus", status_code=status.HTTP_200_OK)
+async def prometheus_scrape():
+    """Exposes scraped Prometheus metrics in text/plain exposition format."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
