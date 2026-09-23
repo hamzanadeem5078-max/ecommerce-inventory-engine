@@ -1,6 +1,7 @@
 import json
 import logging
 import redis.asyncio as aioredis
+from opentelemetry import trace
 from sqlalchemy.orm import Session
 
 from circuit_breaker import TargetedCircuitBreaker, CircuitBreakerOpenException
@@ -16,6 +17,27 @@ global_circuit_breaker = TargetedCircuitBreaker(
 )
 
 
+def _get_w3c_traceparent() -> str | None:
+    """Extracts active OTel span context and formats as W3C traceparent string."""
+    span = trace.get_current_span()
+    ctx = span.get_span_context()
+    if ctx.is_valid:
+        return f"00-{ctx.trace_id:032x}-{ctx.span_id:016x}-{ctx.trace_flags:02x}"
+    return None
+
+
+def _build_stream_payload(event_type: str, payload: dict) -> dict:
+    """Constructs flat Redis XADD dictionary with optional W3C trace context injection."""
+    data = {
+        "event_type": event_type,
+        "payload": json.dumps(payload)
+    }
+    tp = _get_w3c_traceparent()
+    if tp:
+        data["traceparent"] = tp
+    return data
+
+
 class EventProducer:
     """
     Legacy/Standard Event Producer for direct Redis Stream publishing.
@@ -28,10 +50,7 @@ class EventProducer:
         Publishes an event directly to a Redis Stream without fallback.
         """
         try:
-            data = {
-                "event_type": event_type,
-                "payload": json.dumps(payload)
-            }
+            data = _build_stream_payload(event_type, payload)
             message_id = await self.redis_client.xadd(stream_name, data)
             logger.info(f"Published event '{event_type}' to stream '{stream_name}' with ID: {message_id}")
             return message_id
@@ -51,10 +70,7 @@ class ResilientEventProducer:
         self.breaker = global_circuit_breaker
 
     async def _raw_redis_publish(self, stream_name: str, event_type: str, payload: dict):
-        data = {
-            "event_type": event_type,
-            "payload": json.dumps(payload)
-        }
+        data = _build_stream_payload(event_type, payload)
         return await self.redis_client.xadd(stream_name, data)
 
     def _persist_to_outbox(self, db: Session, event_type: str, payload: dict, last_error: str) -> None:

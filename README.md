@@ -709,3 +709,21 @@ routers/metrics_router.py: Exposed unweighted RAM-resident time-series expositio
 worker.py: Hooked atomic .inc() on DLQ quarantine and .set() on outbox delivery latency delta calculation.
 
 routers/dlq.py: Incremented replay counter on atomic state transition from DEAD back to PENDING.
+
+
+## Day 74: W3C Trace Context (traceparent) Injection for Redis Stream Outbox Dispatch
+
+🎯 Objective
+Inject W3C traceparent metadata headers into Redis Stream (XADD) payload dictionaries during event publishing to bind asynchronous consumer execution logs to upstream HTTP request traces.
+
+🛡️ Defensive Perspective & Threat Model
+
+Failure Vectors Identified: No-op / invalid span context leakage producing dead telemetry strings (00-00000000000000000000000000000000-0000000000000000-00), and wire-format type pollution by embedding raw OTel span/context objects into Redis stream hash fields.
+
+Boundary Safeguard: Conditional validity gating (ctx.is_valid) wrapped inside a centralized payload serialization helper (_build_stream_payload).
+
+Defensive Invariant: Redis Stream payload dictionaries must contain strictly scalar string/bytes key-value pairs, and missing/invalid trace contexts must omit the field rather than emit null-trace artifacts.
+
+🔧 Architecture & Code Artifacts
+
+event_producer.py: Introduced _get_w3c_traceparent() and _build_stream_payload(); updated EventProducer.publish_event and ResilientEventProducer._raw_redis_publish to enforce boundary trace envelope injection.
