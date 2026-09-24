@@ -13,7 +13,12 @@ import redis.asyncio as aioredis  # Async Redis client for pipeline execution
 from lua_scripts import RETRY_COUNT_LUA
 from metrics import dlq_depth_gauge, outbox_lag_seconds_gauge
 
+# OpenTelemetry Imports for Distributed Tracing
+from opentelemetry import trace
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
 logger = logging.getLogger("worker")
+tracer = trace.get_tracer("ecommerce.worker")
 
 GROUP_NAME = "inventory_workers"
 CONSUMER_NAME = "worker_1"
@@ -140,29 +145,50 @@ async def worker_loop(redis_client):
 
             for stream, messages in entries:
                 for message_id, fields in messages:
-                    try:
-                        await parse_and_process_event(message_id, fields)
-                        await redis_client.xack(STREAM_NAME, GROUP_NAME, message_id)
-                    except Exception as process_err:
-                        logger.error(f"[WORKER FAIL] Processing error on {message_id}: {process_err}")
-                        retry_key = f"retry:count:{message_id}"
-                        res = await redis_client.eval(RETRY_COUNT_LUA, 1, retry_key, 3, 86400)
+                    # 1. Defensively decode Redis bytes to strings for OpenTelemetry carrier compatibility
+                    decoded_fields = {
+                        (k.decode("utf-8") if isinstance(k, bytes) else k): (
+                            v.decode("utf-8") if isinstance(v, bytes) else v
+                        )
+                        for k, v in fields.items()
+                    }
+
+                    # 2. Extract remote parent context from W3C traceparent injected upstream
+                    parent_context = TraceContextTextMapPropagator().extract(carrier=decoded_fields)
+
+                    # 3. Open a traced span linked directly to the upstream HTTP request tree
+                    with tracer.start_as_current_span("process_stream_message", context=parent_context) as span:
+                        span.set_attribute("messaging.system", "redis")
+                        span.set_attribute("messaging.operation", "process")
+                        span.set_attribute("messaging.message_id", message_id)
                         
-                        if res == 0:
-                            logger.warning(f"[DLQ QUARANTINE] Message {message_id} exceeded max retries. Routing to dlq:stream.")
-                            dlq_depth_gauge.labels(queue_name="dlq:stream").inc()
-                            dlq_payload = {
-                                "original_id": message_id,
-                                "fields": str(fields),
-                                "last_error": str(process_err),
-                                "quarantined_at": datetime.now(timezone.utc).isoformat()
-                            }
-                            await redis_client.xadd("dlq:stream", dlq_payload)
+                        try:
+                            await parse_and_process_event(message_id, decoded_fields)
                             await redis_client.xack(STREAM_NAME, GROUP_NAME, message_id)
-                            await redis_client.delete(retry_key)
-                        else:
-                            logger.info(f"[RETRY QUEUED] Message {message_id} retry count: {res}/3.")
-                        await asyncio.sleep(0.1)
+                            span.set_status(trace.StatusCode.OK)
+                        except Exception as process_err:
+                            span.record_exception(process_err)
+                            span.set_status(trace.StatusCode.ERROR, str(process_err))
+                            logger.error(f"[WORKER FAIL] Processing error on {message_id}: {process_err}")
+                            retry_key = f"retry:count:{message_id}"
+                            res = await redis_client.eval(RETRY_COUNT_LUA, 1, retry_key, 3, 86400)
+                            
+                            if res == 0:
+                                logger.warning(f"[DLQ QUARANTINE] Message {message_id} exceeded max retries. Routing to dlq:stream.")
+                                dlq_depth_gauge.labels(queue_name="dlq:stream").inc()
+                                dlq_payload = {
+                                    "original_id": message_id,
+                                    "fields": str(decoded_fields),
+                                    "last_error": str(process_err),
+                                    "quarantined_at": datetime.now(timezone.utc).isoformat()
+                                }
+                                await redis_client.xadd("dlq:stream", dlq_payload)
+                                await redis_client.xack(STREAM_NAME, GROUP_NAME, message_id)
+                                await redis_client.delete(retry_key)
+                            else:
+                                logger.info(f"[RETRY QUEUED] Message {message_id} retry count: {res}/3.")
+                    
+                    await asyncio.sleep(0.1)
 
         except asyncio.CancelledError:
             logger.info("Worker task received cancellation signal. Exiting.")
@@ -170,3 +196,5 @@ async def worker_loop(redis_client):
         except Exception as e:
             logger.error(f"Error in outer worker loop: {e}")
             await asyncio.sleep(1)
+
+

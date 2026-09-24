@@ -337,6 +337,21 @@ System Architecture & Behavior
 To guarantee eventual consistency between the PostgreSQL relational store and the high-speed Redis read layer, all write mutation paths (PATCH /products/{id}, DELETE /products/{id}, and POST /products/{id}/stock) now execute explicit post-commit cache invalidation. The architecture enforces an strict order of operations: database transactions must fully commit to PostgreSQL prior to clearing the target key (product:{product_id}) from Redis. Subsequent read requests incur an intentional cache miss, fetching fresh database state and repopulating the Redis cache ("repainting the entrance menu board"). Cache invalidation calls are wrapped in non-blocking exception handlers targeting RedisError, ensuring that caching layer outages never roll back committed relational transactions or return HTTP 500 status codes to clients.
 
 
+## Day 75: Distributed Tracing Consumer Context Extraction & System Milestone Audit
+
+🎯 Objective
+Integrated remote W3C `traceparent` context extraction within the Redis Stream consumer loop (`worker.py`) to bridge asynchronous background workers with incoming HTTP request traces, followed by a comprehensive 75-Day System Integration & Telemetry Audit.
+
+🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified:** Orphaned telemetry spans breaking trace trees across asynchronous boundaries; binary byte/string type mismatches in Redis message dictionaries causing silent OpenTelemetry context extraction failures.
+* **Boundary Safeguard:** Explicit UTF-8 string normalization of raw Redis byte dictionaries followed by W3C `TraceContextTextMapPropagator.extract()` and traced child span binding.
+* **Defensive Invariant:** Every asynchronous background worker iteration must extract remote parent context and bind execution to the incoming W3C trace tree to preserve absolute observability and debugging capability under high concurrency.
+
+🔧 Architecture & Code Artifacts
+* **`worker.py`**: Added defensive key-value decoding for Redis stream fields and wrapped event processing logic in OpenTelemetry child spans (`tracer.start_as_current_span`) linked to remote parent contexts.
+* **`audit_day_75.py`**: Implemented and executed an integration audit verifying Redis consumer group health, stream lengths, Pending Entries List (PEL) backpressure, and PostgreSQL event ledger consistency.
+
+
 
 
 
