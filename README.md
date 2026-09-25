@@ -742,3 +742,19 @@ Defensive Invariant: Redis Stream payload dictionaries must contain strictly sca
 🔧 Architecture & Code Artifacts
 
 event_producer.py: Introduced _get_w3c_traceparent() and _build_stream_payload(); updated EventProducer.publish_event and ResilientEventProducer._raw_redis_publish to enforce boundary trace envelope injection.
+
+
+
+## Day 75 - 76: High-Concurrency Load Testing & Distributed Traffic Simulation (Locust)
+
+### 🎯 Objective
+Implement and execute a high-concurrency Locust load-testing harness simulating adversarial flash-sale traffic spikes, validating distributed W3C traceparent telemetry, global rate-limiting guards, and asynchronous Redis locking invariants under peak concurrent pressure.
+
+### 🛡️ Defensive Perspective & Threat Model
+* **Failure Vectors Identified:** Synthetic synchronization storms from flat scripts, unhandled HTTP 500 exceptions caused by synchronous context managers (`with`) wrapping asynchronous Redis locks, and blind spots in distributed request tracing.
+* **Boundary Safeguard:** Stochastic think-time jitter (`between`), explicit HTTP status code assertion mapping for expected business outcomes (treating 400 inventory stock-outs and 429 rate-limits as valid controlled outcomes), and strict asynchronous context manager compliance (`async with`).
+* **Defensive Invariant:** Load generators must mirror realistic organic user variance with complete edge-to-core W3C `traceparent` telemetry continuity to guarantee end-to-end auditability across async boundaries and worker queues.
+
+### 🔧 Architecture & Code Artifacts
+* **`locustfile.py`:** Created the `FlashSaleUser` behavior class featuring weighted browsing tasks (`@task(3)`), high-concurrency flash sale orders (`@task(1)`), randomized wait jitter, and W3C traceparent injection.
+* **`routers/orders.py`:** Upgraded the Redis locking guard invocation from a synchronous block to an asynchronous context manager (`async with redis_lock_guard`), resolving type errors and preventing runtime failures under heavy event loops.

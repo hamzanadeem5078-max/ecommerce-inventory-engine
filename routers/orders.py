@@ -4,7 +4,8 @@ from typing import List
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from database import get_db, get_redis_client
+from database import get_db
+from redis_db import get_redis_client
 from dependencies import enforce_rate_limit, redis_lock_guard
 from event_producer import ResilientEventProducer
 import models
@@ -43,7 +44,7 @@ async def create_order(
     Publishes 'order.created' event via ResilientEventProducer.
     Falls back to Postgres outbox_events table if Redis Stream fails or Circuit Breaker is OPEN.
     """
-    with redis_lock_guard(order.product_id, redis_client):
+    async with redis_lock_guard(order.product_id, redis_client):
         try:
             # 1. Pessimistic Row Lock on Product Inventory
             product = (
