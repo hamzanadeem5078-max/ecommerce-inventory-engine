@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
+from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST
 
 logger = logging.getLogger("metrics")
 
@@ -101,7 +102,7 @@ def evaluate_system_health(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
-from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST
+
 
 # Bounded cardinality time-series definitions
 dlq_depth_gauge = Gauge(
