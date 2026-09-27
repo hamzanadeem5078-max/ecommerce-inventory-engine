@@ -1,5 +1,7 @@
 import logging
+import httpx
 from typing import Dict, Any
+from datetime import datetime, timezone
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST
@@ -26,30 +28,22 @@ async def get_stream_metrics(
     }
 
     try:
-        # O(1) Stream length query
         metrics["stream_length"] = await redis_client.xlen(stream_key)
-
-        # O(N) where N is number of consumer groups (typically 1-5 groups)
         groups = await redis_client.xinfo_groups(stream_key)
         
         target_group = next((g for g in groups if g.get("name") == group_name or g.get("name") == group_name.encode()), None)
 
         if target_group:
-            # redis-py returns dict keys as bytes or str depending on decode_responses flag
             metrics["pending_count"] = target_group.get("pending", target_group.get(b"pending", 0))
             metrics["consumer_count"] = target_group.get("consumers", target_group.get(b"consumers", 0))
-            
-            # Lag is directly available in Redis 7.0+
             metrics["lag"] = target_group.get("lag", target_group.get(b"lag", 0))
             
-            # Fallback if lag is None (e.g. legacy Redis or uncomputed state)
             if metrics["lag"] is None:
                 metrics["lag"] = 0
         else:
             metrics["status"] = "group_not_found"
 
     except ResponseError as e:
-        # Handles 'ERR no such key' or 'NOGROUP No such key or consumer group' on cold start
         logger.warning(f"Metrics collection fallback for {stream_key}: {str(e)}")
         metrics["status"] = "uninitialized"
     except Exception as e:
@@ -59,11 +53,11 @@ async def get_stream_metrics(
     return metrics
 
 
-
 # Operational Thresholds
 LAG_WARNING_THRESHOLD = 500
 LAG_CRITICAL_THRESHOLD = 2000
 PENDING_WARNING_THRESHOLD = 200
+ALERT_COOLDOWN_SECONDS = 300  # 5-minute suppression window per alert type
 
 def evaluate_system_health(metrics: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -78,12 +72,10 @@ def evaluate_system_health(metrics: Dict[str, Any]) -> Dict[str, Any]:
     consumers = metrics.get("consumer_count", 0)
     status = metrics.get("status", "healthy")
 
-    # Check worker vitality
     if consumers == 0 and status == "healthy" and lag > 0:
         health_status = "CRITICAL"
         alerts.append("NO_ACTIVE_CONSUMERS: Worker process down while stream has unread messages.")
 
-    # Check stream backpressure (Lag)
     if lag >= LAG_CRITICAL_THRESHOLD:
         health_status = "CRITICAL"
         alerts.append(f"CRITICAL_STREAM_LAG: Lag ({lag}) exceeded threshold ({LAG_CRITICAL_THRESHOLD}).")
@@ -91,7 +83,6 @@ def evaluate_system_health(metrics: Dict[str, Any]) -> Dict[str, Any]:
         health_status = "WARNING"
         alerts.append(f"HIGH_STREAM_LAG: Lag ({lag}) approaching threshold ({LAG_WARNING_THRESHOLD}).")
 
-    # Check unacknowledged message backlog (PEL leak / stuck workers)
     if pending >= PENDING_WARNING_THRESHOLD and health_status != "CRITICAL":
         health_status = "WARNING"
         alerts.append(f"HIGH_PENDING_ENTRIES: Unacked messages ({pending}) indicate worker slowdown or processing bottlenecks.")
@@ -101,7 +92,47 @@ def evaluate_system_health(metrics: Dict[str, Any]) -> Dict[str, Any]:
     return metrics
 
 
+async def dispatch_webhook_alert(redis_client: Redis, webhook_url: str, metrics: Dict[str, Any]) -> None:
+    """
+    Dispatches asynchronous webhook alerts for non-healthy classifications,
+    guaranteeing non-blocking execution and Redis-backed cooldown suppression.
+    """
+    health_status = metrics.get("health_classification", "HEALTHY")
+    if health_status == "HEALTHY" or not webhook_url:
+        return
 
+    for alert in metrics.get("alerts", []):
+        alert_key = f"alert:cooldown:{alert.split(':')[0]}"
+        
+        # Redis atomic set with NX and EX to prevent alert storms (thundering herd)
+        acquired = await redis_client.set(alert_key, "1", ex=ALERT_COOLDOWN_SECONDS, nx=True)
+        if not acquired:
+            logger.debug(f"[ALERT SUPPRESSED] Cooldown active for alert: {alert}")
+            continue
+
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "health_classification": health_status,
+            -   "alert_message": alert,
+            "metrics_snapshot": {
+                "stream_key": metrics.get("stream_key"),
+                "lag": metrics.get("lag"),
+                "pending_count": metrics.get("pending_count"),
+                "consumer_count": metrics.get("consumer_count")
+            }
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                response = await client.post(webhook_url, json=payload)
+                if response.status_code >= 400:
+                    logger.warning(f"[WEBHOOK FAILED] Endpoint returned status {response.status_code}")
+                else:
+                    logger.info(f"[WEBHOOK DISPATCHED] Alert sent successfully for: {alert}")
+        except httpx.RequestError as e:
+            logger.error(f"[WEBHOOK ERROR] Network failure dispatching alert: {str(e)}")
+        except Exception as e:
+            logger.error(f"[WEBHOOK UNHANDLED] Unexpected error during webhook dispatch: {str(e)}")
 
 
 # Bounded cardinality time-series definitions
