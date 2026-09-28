@@ -113,7 +113,7 @@ async def dispatch_webhook_alert(redis_client: Redis, webhook_url: str, metrics:
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "health_classification": health_status,
-            -   "alert_message": alert,
+            "alert_message": alert,
             "metrics_snapshot": {
                 "stream_key": metrics.get("stream_key"),
                 "lag": metrics.get("lag"),
