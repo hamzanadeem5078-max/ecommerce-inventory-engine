@@ -1,3 +1,4 @@
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request
 from database import Base, engine
@@ -6,35 +7,46 @@ import models
 import redis_db
 from routers import categories, health, inventory, orders, products, metrics_router, dlq
 
-# Fires the machinery to look at models and build them in Postgres
 Base.metadata.create_all(bind=engine)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    client = redis_db.get_redis_client()
+    app.state.redis = client
     yield
-    # Safely close connection for async redis pool
-    await redis_db.redis_client.aclose()
+    await client.close()
 
 
-# Global rate limiter dependency wrapper for FastAPI
 async def global_rate_limiter(request: Request):
     client_ip = request.client.host if request.client else "anonymous"
-
-    # Enforce limit using module-level dot notation with async context manager
+    redis_c = redis_db.get_redis_client()
     async with dependencies.rate_limit_guard(
         key=f"global:{client_ip}",
         limit=60,
         window=60,
-        client=redis_db.get_redis_client(),
+        client=redis_c,
     ):
         pass
 
 
-# Initialize FastAPI with global rate limiting dependency
 app = FastAPI(lifespan=lifespan, dependencies=[Depends(global_rate_limiter)])
 
-# Include routers
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    incoming_id = request.headers.get("X-Correlation-ID")
+    corr_id = incoming_id if incoming_id else str(uuid.uuid4())
+    token = dependencies.correlation_id_var.set(corr_id)
+    
+    try:
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = corr_id
+        return response
+    finally:
+        dependencies.correlation_id_var.reset(token)
+
+
 app.include_router(categories.router)
 app.include_router(products.router)
 app.include_router(inventory.router)

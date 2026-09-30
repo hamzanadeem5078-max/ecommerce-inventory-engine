@@ -817,3 +817,19 @@ Executed a comprehensive integration audit script (`audit_day_80.py`) to program
 
 🔧 Architecture & Code Artifacts
 - audit_day_80.py: Implements an end-to-end verification harness exercising circuit breaker state transitions (Closed $\rightarrow$ Open $\rightarrow$ Half-Open $\rightarrow$ Closed), telemetry health classification, and Redis alert deduplication.
+
+
+## Day 81: Distributed Tracing & Event-Loop-Safe Redis Connection Management
+
+🎯 Objective
+Implement robust request-scoped correlation ID propagation while resolving asynchronous event loop mismatches between FastAPI test clients and global Redis client instances.
+
+🛡️ Defensive Perspective & Threat Model
+- Failure Vectors Identified: `RuntimeError: Event loop is closed` during test client execution caused by static global Redis clients binding permanently to a dead initial event loop across ephemeral AnyIO background threads.
+- Boundary Safeguard: Dynamic lazy connection initialization (`get_redis_client`) paired with module-level attribute dispatching to bind asynchronous Redis operations strictly to the currently active event loop.
+- Defensive Invariant: Ephemeral I/O connections must adapt to and synchronize with the active event loop lifecycle without risking stale bindings or closed-loop exceptions.
+
+🔧 Architecture & Code Artifacts
+- `redis_db.py`: Implemented a loop-aware lazy connection factory with module-level `__getattr__` support for safe fallback and legacy import compatibility.
+- `dependencies.py`: Integrated context-variable-based correlation tracking and robust async rate-limiting guards utilizing dynamic connection retrieval.
+- `main.py`: Configured FastAPI lifespan state bindings for Redis and added HTTP middleware for seamless `X-Correlation-ID` header injection and propagation.

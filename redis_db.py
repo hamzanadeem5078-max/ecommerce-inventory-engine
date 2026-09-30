@@ -1,17 +1,28 @@
 import os
-from redis.asyncio import ConnectionPool, Redis
+import asyncio
+import redis.asyncio as aioredis
 
-# Create pool using an environment variable URL (Fallback: localhost)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# Construct the pool object
-pool = ConnectionPool.from_url(
-    REDIS_URL, max_connections=10, decode_responses=True, protocol=2
-)
+_redis_client: aioredis.Redis | None = None
+_client_loop = None
 
-# Instantiate the Redis client bound to that pool
-redis_client = Redis(connection_pool=pool)
+def get_redis_client() -> aioredis.Redis:
+    global _redis_client, _client_loop
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
 
+    # If loop changed (e.g., TestClient background thread loop), reset client cleanly
+    if _redis_client is None or _client_loop != current_loop:
+        _redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        _client_loop = current_loop
 
-def get_redis_client():
-    return redis_client
+    return _redis_client
+
+# Module-level __getattr__ to support legacy imports like `from redis_db import redis_client`
+def __getattr__(name):
+    if name == "redis_client":
+        return get_redis_client()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
