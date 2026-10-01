@@ -833,3 +833,23 @@ Implement robust request-scoped correlation ID propagation while resolving async
 - `redis_db.py`: Implemented a loop-aware lazy connection factory with module-level `__getattr__` support for safe fallback and legacy import compatibility.
 - `dependencies.py`: Integrated context-variable-based correlation tracking and robust async rate-limiting guards utilizing dynamic connection retrieval.
 - `main.py`: Configured FastAPI lifespan state bindings for Redis and added HTTP middleware for seamless `X-Correlation-ID` header injection and propagation.
+
+
+## Day 82: Distributed Tracing Propagation Across Database Connection Pools and Outbox Workers
+
+🎯 Objective
+Propagated Correlation IDs across SQLAlchemy connection checkouts via cursor event listeners and bound background Redis Stream consumers to asynchronous request contexts.
+
+🛡️ Defensive Perspective & Threat Model
+
+Failure Vectors Identified: Connection pool context bleed (stale trace IDs leaking across connection reuse) and background worker trace amnesia (untracked asynchronous background loops losing traceability).
+
+Boundary Safeguard: SQLAlchemy before_cursor_execute event listener with retval=True and ContextVar token lifecycle binding/resetting in worker.py.
+
+Defensive Invariant: Every outbound database query must automatically carry an intercepted trace comment, and every background stream message execution must enforce an isolated context frame.
+
+🔧 Architecture & Code Artifacts
+
+database.py: Integrated a before_cursor_execute event listener to dynamically inject active correlation_id_var values as SQL comments (/* trace_id:... */) before queries hit PostgreSQL.
+
+worker.py: Enhanced the Redis stream processing loop to extract trace headers from payloads and explicitly bind/reset context tokens using contextvars.
