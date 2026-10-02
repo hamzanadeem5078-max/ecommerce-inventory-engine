@@ -853,3 +853,19 @@ Defensive Invariant: Every outbound database query must automatically carry an i
 database.py: Integrated a before_cursor_execute event listener to dynamically inject active correlation_id_var values as SQL comments (/* trace_id:... */) before queries hit PostgreSQL.
 
 worker.py: Enhanced the Redis stream processing loop to extract trace headers from payloads and explicitly bind/reset context tokens using contextvars.
+
+
+## Day 83: Milestone 17 Full Integration Audit & Distributed Tracing End-to-End Stress Test
+
+🎯 **Objective**
+Executed a comprehensive integration audit script (`audit_day_83.py`) to stress-test the distributed tracing and telemetry pipeline across the FastAPI gateway, SQLAlchemy persistence layer, and Redis Streams workers.
+
+🛡️ **Defensive Perspective & Threat Model**
+- **Failure Vectors Identified:** Context bleed/leakage across concurrent async boundaries, worker context loss on message consumption, and connection pool query attribution drift.
+- **Boundary Safeguard:** Isolated `ContextVar` token binding/resetting, SQLAlchemy `before_cursor_execute` query comment instrumentation (`/* trace_id:... */`), and explicit Redis payload deserialization.
+- **Defensive Invariant:** Every asynchronous execution scope and database cursor execution must bind and cleanly reset an immutable trace context token to guarantee zero observability blind spots under load.
+
+🔧 **Architecture & Code Artifacts**
+- **audit_day_83.py**: Automated integration script validating ContextVar propagation, database query cursor wrapping, and worker message correlation parsing.
+- **database.py**: SQLAlchemy cursor event listener stamping active trace markers into outbound statements.
+- **worker.py**: Redis stream consumer pipeline extracting and binding correlation IDs into local execution context.
